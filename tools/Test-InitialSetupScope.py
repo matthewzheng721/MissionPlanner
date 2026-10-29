@@ -65,7 +65,7 @@ try:
     def offline():
         page=select('ConfigFirmwareManifest')
         names=[p.PageType.Name for p in field(initial,'backstageView').Pages];log('offline_pages='+','.join(names))
-        assert names==['ConfigFirmwareManifest','ConfigSerialInjectGPS']
+        assert names==['ConfigFirmwareManifest','InitialSetupUnavailable','InitialSetupUnavailable','InitialSetupUnavailable','ConfigSerialInjectGPS']
         visible=[c.Name for c in page.Controls if c.Visible];log('firmware_visible='+','.join(visible))
         assert set(visible)==set(['lbl_Custom_firmware_label','lbl_status','progress'])
     ui(offline)

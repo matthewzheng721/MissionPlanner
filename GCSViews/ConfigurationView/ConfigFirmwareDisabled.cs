@@ -9,6 +9,10 @@ namespace MissionPlanner.GCSViews.ConfigurationView
         public ConfigFirmwareDisabled()
         {
             InitializeComponent();
+            // 本项目仅允许安装本地固件，连接时只显示原禁刷提示。
+            but_bootloaderupdate.Visible = false;
+            label2.Visible = false;
+            label1.Text = "飞控连接时不能安装固件，请先断开连接。";
         }
 
         public void Activate()

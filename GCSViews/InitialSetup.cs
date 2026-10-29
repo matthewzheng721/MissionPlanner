@@ -1,4 +1,4 @@
-﻿using log4net;
+using log4net;
 using MissionPlanner.ArduPilot;
 using MissionPlanner.Controls;
 using MissionPlanner.Controls.BackstageView;
@@ -156,18 +156,12 @@ namespace MissionPlanner.GCSViews
         {
             ResourceManager rm = new ResourceManager(this.GetType());
 
-            if (!gotAllParams)
-            {
-                if (MainV2.comPort.BaseStream.IsOpen)
-                    AddBackstageViewPage(typeof(ConfigParamLoading), Strings.Loading);
-            }
-
-            // 本项目仅保留阵地使用的五项设置，不创建其余页面或启动专用后台工作。
-            AddBackstageViewPage(typeof(ConfigFirmwareDisabled), "本地固件安装", isConnected);
-            AddBackstageViewPage(typeof(ConfigFirmwareManifest), "本地固件安装", isDisConnected);
-            AddBackstageViewPage(typeof(ConfigAccelerometerCalibration), "校准水平", isConnected && gotAllParams);
-            AddBackstageViewPage(typeof(ConfigHWCompass2), "大飞机罗盘校准", isConnected && gotAllParams);
-            AddBackstageViewPage(typeof(ConfigProjectMotor), "电机启动与恢复", isConnected && gotAllParams);
+            // 五个入口始终可见；未就绪时不构造依赖飞控参数的页面。
+            bool ready = isConnected && gotAllParams && MainV2.comPort.MAV.param.TotalReceived > 0;
+            AddBackstageViewPage(isConnected ? typeof(ConfigFirmwareDisabled) : typeof(ConfigFirmwareManifest), "本地固件安装");
+            AddBackstageViewPage(ready ? typeof(ConfigAccelerometerCalibration) : typeof(InitialSetupUnavailable), "校准水平");
+            AddBackstageViewPage(ready ? typeof(ConfigHWCompass2) : typeof(InitialSetupUnavailable), "大飞机罗盘校准");
+            AddBackstageViewPage(ready ? typeof(ConfigProjectMotor) : typeof(InitialSetupUnavailable), "电机启动与恢复");
             AddBackstageViewPage(typeof(ConfigSerialInjectGPS), "RTK/GPS 注入");
             // remeber last page accessed
             foreach (BackstageViewPage page in backstageView.Pages)
@@ -188,6 +182,22 @@ namespace MissionPlanner.GCSViews
                 lastpagename = backstageView.SelectedPage.LinkText;
 
             backstageView.Close();
+        }
+    }
+    // 不订阅通信、不读取参数的占位页，入口可见但不能发出操作。
+    public sealed class InitialSetupUnavailable : MyUserControl, IActivate
+    {
+        private readonly Label status = new Label { AutoSize = true, Left = 24, Top = 24 };
+        public InitialSetupUnavailable()
+        {
+            Controls.Add(status);
+            Controls.Add(new Button { Text = "当前操作不可用", Enabled = false, Left = 24, Top = 64, Width = 180 });
+        }
+        public void Activate()
+        {
+            status.Text = MainV2.comPort.BaseStream.IsOpen
+                ? "正在读取飞控参数，此操作暂不可用；参数读取完成后自动恢复。"
+                : "未连接飞控，此操作不可用；请先连接飞控并等待参数读取完成。";
         }
     }
 }
