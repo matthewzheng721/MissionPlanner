@@ -74,3 +74,7 @@ $script = (Resolve-Path '.\tools\Test-FlightDataScope.py').Path
 `result.txt` 的 PASS/FAIL 与 `status.txt` 的0/1说明完成状态。`health.csv` 记录阶段、FTP是否仍运行、遥测包龄、UI定时器实际间隔和模式；`parameter-events.csv` 记录 PARAM_SET 与 PARAM_VALUE 时间，可区分参数表加载/确认停留与实际链路应答时间。本机TCP结果不代表低速数传、外部机场/ADSB/空域服务已经验收。
 
 可选 `MP_CONFIG_CAPTURE=1` 在同一界面调用内核对当前页面，使用实际控件 DrawToBitmap 保存 Planner、全部参数表及 MAVFTP 截图。须肉眼核对生成图片，不把名称当作页面正确性的证明。`MP_CONFIG_TOOLS_ONLY=1` 仅复测消息频率及恢复，结果会注明 tools_only，不代表重跑完整FTP/写参测试。结束后关闭本轮专用开发版及模拟器。
+
+## 初始设置入口可见性验证
+
+`Test-InitialSetupVisibility.py` 使用 MP IronPython `-script` 入口和本机 SITL TCP5760，输出目录可由 `MP_VISIBLE_OUTPUT` 指定。检查离线固定五名称、三个操作禁用与提示，正常连接后无需手动切页即可恢复原页面、电机参数只读回读，以及断线后自动恢复禁用。参数未齐分支通过临时修改本机参数缓存报告数量模拟，不向飞控写参。保存并核对 `offline-five-pages.png`；`result.txt` 的 PASS 与 `status.txt` 的0表示通过。本脚本不校准、不解锁、不刷固件、不修改电机参数。
