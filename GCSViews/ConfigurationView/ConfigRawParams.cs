@@ -42,12 +42,22 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
         private NaturalStringComparer naturalsorter = new NaturalStringComparer();
 
+        private CancellationTokenSource rowLoadCancellation;
+        private bool loadingParameters;
+        private string writeButtonText;
+
+        private sealed class ParameterRowMetadata
+        {
+            public string Description, Range, Options, Units;
+        }
+
         public ConfigRawParams()
         {
             InitializeComponent();
+            writeButtonText = BUT_writePIDS.Text;
         }
 
-        public void Activate()
+        public async void Activate()
         {
             if ((rowlist.Count == 0) || (!Settings.Instance.GetBoolean("SlowMachine", false))) startup = true;
             //If we connected to another vehicle the do a full refresh
@@ -85,19 +95,21 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             splitContainer1.Panel1Collapsed = Settings.Instance.GetBoolean("rawparam_panel1collapsed", false);
             but_collapse.Text = splitContainer1.Panel1Collapsed ? ">" : "<";
 
-            processToScreen();
+            if (!await processToScreen()) return;
 
             Params.Enabled = true;
 
             Common.MessageShowAgain(Strings.RawParamWarning, Strings.RawParamWarningi);
 
             startup = false;
+            Enabled = true;
 
             txt_search.Focus();
         }
 
         public void Deactivate()
         {
+            rowLoadCancellation?.Cancel();
             foreach (DataGridViewColumn col in Params.Columns)
             {
                 // Don't need to save the width of a fill column
@@ -468,11 +480,12 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
                 startup = true;
 
-                processToScreen();
+                if (!await processToScreen()) return;
 
                 FilterTimerOnElapsed(null, null);
 
                 startup = false;
+                Enabled = true;
             }
         }
 
@@ -496,7 +509,9 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                 var value = Params[e.ColumnIndex, e.RowIndex].Value.ToString();
                 value = value.Replace(',', '.');
 
+                var editWatch = System.Diagnostics.Stopwatch.StartNew();
                 var newvalue = (double) new Expression(value).calculate();
+                log.InfoFormat("参数编辑计时：表达式 {0}ms", editWatch.ElapsedMilliseconds);
                 if (double.IsNaN(newvalue) || double.IsInfinity(newvalue))
                 {
                     throw new Exception();
@@ -540,6 +555,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                     }
                 }
 
+                log.InfoFormat("参数编辑计时：校验累计 {0}ms", editWatch.ElapsedMilliseconds);
                 Params[e.ColumnIndex, e.RowIndex].Style.BackColor = Color.Green;
                 log.InfoFormat("Queue change {0} = {1} ({2})", Params[Command.Index, e.RowIndex].Value, Params[e.ColumnIndex, e.RowIndex].Value, newvalue);
                 _changes[Params[Command.Index, e.RowIndex].Value] = newvalue;
@@ -585,8 +601,21 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             return sb.ToString();
         }
 
-        internal void processToScreen()
+        internal async Task<bool> processToScreen()
         {
+            rowLoadCancellation?.Cancel();
+            var cancellation = new CancellationTokenSource();
+            rowLoadCancellation = cancellation;
+            bool loaded = false;
+            loadingParameters = true;
+            Enabled = false;
+            Params.Enabled = false;
+            BUT_writePIDS.Enabled = false;
+            BUT_writePIDS.Text = "正在加载参数…";
+            try
+            {
+            // 分段实测页面构建，区分表格工作与用户确认停留。
+            var renderWatch = System.Diagnostics.Stopwatch.StartNew();
             toolTip1.RemoveAll();
             Params.Rows.Clear();
             log.Info("processToScreen");
@@ -602,23 +631,52 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                 foreach (string item in MainV2.comPort.MAV.param.Keys)
                     list.Add(item);
 
+                var firmware = MainV2.comPort.MAV.cs.firmware.ToString();
+                var favorites = Settings.Instance.GetList("fav_params").ToArray();
+                var metadata = new ParameterRowMetadata[list.Count];
+                // 后台仅读取元数据，不能创建或读取任何 WinForms 控件。
+                // 单后台循环避免元数据库首次加载被并行重复触发。
+                await Task.Run(() =>
+                {
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        cancellation.Token.ThrowIfCancellationRequested();
+                        var name = list[i];
+                        if (string.IsNullOrEmpty(name)) continue;
+                        var data = new ParameterRowMetadata { Description = "", Range = "", Options = "", Units = "" };
+                        try
+                        {
+                        data.Description = ParameterMetaDataRepository.GetParameterMetaData(name,
+                            ParameterMetaDataConstants.Description, firmware);
+                        if (!string.IsNullOrEmpty(data.Description))
+                        {
+                            data.Range = ParameterMetaDataRepository.GetParameterMetaData(name, ParameterMetaDataConstants.Range, firmware);
+                            data.Options = ParameterMetaDataRepository.GetParameterMetaData(name, ParameterMetaDataConstants.Values, firmware);
+                            data.Units = ParameterMetaDataRepository.GetParameterMetaData(name, ParameterMetaDataConstants.Units, firmware);
+                        }
+                        }
+                        catch (Exception ex) { log.Error("参数元数据读取失败：" + name, ex); }
+                        metadata[i] = data;
+                    }
+                });
+                if (IsDisposed || cancellation.IsCancellationRequested) return false;
+                log.InfoFormat("参数表计时：后台元数据累计 {0}ms", renderWatch.ElapsedMilliseconds);
                 rowlist.Clear();
 
                 bool has_defaults = false;
 
-                Parallel.ForEach(list, value =>
+                for (int rowIndex = 0; rowIndex < list.Count; rowIndex++)
                 {
-                    if (value == null || value == "")
-                        return;
+                    var value = list[rowIndex];
+                    if (string.IsNullOrEmpty(value) || !MainV2.comPort.MAV.param.ContainsKey(value))
+                        continue;
 
                     var row = new DataGridViewRow() { Height = 36 };
-                    lock (rowlist)
-                        rowlist.Add(row);
+                    rowlist.Add(row);
                     row.CreateCells(Params);
                     row.Cells[Command.Index].Value = value;
                     row.Cells[Value.Index].Value = MainV2.comPort.MAV.param[value].ToString();
-                    var fav_params = Settings.Instance.GetList("fav_params");
-                    row.Cells[Fav.Index].Value = fav_params.Contains(value);
+                    row.Cells[Fav.Index].Value = favorites.Contains(value);
 
                     if (MainV2.comPort.MAV.param[value].default_value.HasValue) {
                         has_defaults = true;
@@ -628,19 +686,16 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                     }
                     try
                     {
-                        var metaDataDescription = ParameterMetaDataRepository.GetParameterMetaData(value,
-                            ParameterMetaDataConstants.Description, MainV2.comPort.MAV.cs.firmware.ToString());
+                        var data = metadata[rowIndex];
+                        var metaDataDescription = data.Description;
                         if (!string.IsNullOrEmpty(metaDataDescription))
                         {
                             row.Cells[Command.Index].ToolTipText = AddNewLinesForTooltip(metaDataDescription);
                             row.Cells[Value.Index].ToolTipText = AddNewLinesForTooltip(metaDataDescription);
 
-                            var range = ParameterMetaDataRepository.GetParameterMetaData(value,
-                                ParameterMetaDataConstants.Range, MainV2.comPort.MAV.cs.firmware.ToString());
-                            var options = ParameterMetaDataRepository.GetParameterMetaData(value,
-                                ParameterMetaDataConstants.Values, MainV2.comPort.MAV.cs.firmware.ToString());
-                            var units = ParameterMetaDataRepository.GetParameterMetaData(value,
-                                ParameterMetaDataConstants.Units, MainV2.comPort.MAV.cs.firmware.ToString());
+                            var range = data.Range;
+                            var options = data.Options;
+                            var units = data.Units;
 
                             row.Cells[Units.Index].Value = units;
                             row.Cells[Options.Index].Value = (range + "\n" + options.Replace(",", "\n")).Trim();
@@ -673,7 +728,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                     {
                         log.Error(ex);
                     }
-                });
+                }
 
                 Default_value.Visible = has_defaults;
                 chk_none_default.Visible = has_defaults;
@@ -688,26 +743,58 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             }
 
 
+            log.InfoFormat("参数表计时：构造行累计 {0}ms", renderWatch.ElapsedMilliseconds);
             log.Info("about to add all");
 
             Params.Visible = false;
 
             Params.Rows.AddRange(rowlist.ToArray());
 
+            log.InfoFormat("参数表计时：加入行累计 {0}ms", renderWatch.ElapsedMilliseconds);
             log.Info("about to sort");
 
+            Params.SortCompare -= OnParamsOnSortCompare;
             Params.SortCompare += OnParamsOnSortCompare;
 
             Params.Sort(Params.Columns[Command.Index], ListSortDirection.Ascending);
 
             Params.Visible = true;
+            log.InfoFormat("参数表计时：排序显示累计 {0}ms", renderWatch.ElapsedMilliseconds);
 
             if (splitContainer1.Panel1Collapsed == false)
             {
                 BuildTree();
             }
 
+            log.InfoFormat("参数表计时：完成树累计 {0}ms", renderWatch.ElapsedMilliseconds);
             log.Info("Done");
+            loaded = true;
+            return true;
+            }
+            catch (OperationCanceledException) { return false; }
+            catch (Exception ex)
+            {
+                log.Error("参数表加载失败", ex);
+                if (!IsDisposed) CustomMessageBox.Show("参数表加载失败：" + ex.Message, Strings.ERROR);
+                return false;
+            }
+            finally
+            {
+                if (ReferenceEquals(rowLoadCancellation, cancellation))
+                {
+                    rowLoadCancellation = null;
+                    loadingParameters = false;
+                    if (!IsDisposed)
+                    {
+                        // 成功时由调用方完成原警告和启动标记后再启用，避免编辑被忽略。
+                        if (!loaded) Enabled = true;
+                        Params.Enabled = true;
+                        BUT_writePIDS.Text = writeButtonText;
+                        BUT_writePIDS.Enabled = MainV2.comPort.BaseStream.IsOpen && !writingParameters;
+                    }
+                }
+                cancellation.Dispose();
+            }
         }
 
         private void BuildTree()
@@ -1141,11 +1228,12 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             cellEditValue = Params[e.ColumnIndex, e.RowIndex].Value.ToString();
         }
 
-        private void BUT_refreshTable_Click(object sender, EventArgs e)
+        private async void BUT_refreshTable_Click(object sender, EventArgs e)
         {
             startup = true;
-            processToScreen();
+            if (!await processToScreen()) return;
             startup = false;
+            Enabled = true;
         }
 
         private void treeView1_AfterSelect(object sender, TreeViewEventArgs e)

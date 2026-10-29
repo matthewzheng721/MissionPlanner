@@ -78,3 +78,11 @@ $script = (Resolve-Path '.\tools\Test-FlightDataScope.py').Path
 ## 初始设置入口可见性验证
 
 `Test-InitialSetupVisibility.py` 使用 MP IronPython `-script` 入口和本机 SITL TCP5760，输出目录可由 `MP_VISIBLE_OUTPUT` 指定。检查离线固定五名称、三个操作禁用与提示，正常连接后无需手动切页即可恢复原页面、电机参数只读回读，以及断线后自动恢复禁用。参数未齐分支通过临时修改本机参数缓存报告数量模拟，不向飞控写参。保存并核对 `offline-five-pages.png`；`result.txt` 的 PASS 与 `status.txt` 的0表示通过。本脚本不校准、不解锁、不刷固件、不修改电机参数。
+
+## 全部参数表性能验证
+
+`Test-ParameterPerformance.py` 使用 MP IronPython `-script` 和本机固定翼 SITL TCP5760，必须使用独立 `-datadir`；输出目录由 `MP_PARAM_PERF_OUTPUT` 指定。脚本以256KB文件在MAVFTP原上传路径保持并发，同时打开Inspector，分段记录进入全参表、额外内容就绪等待、搜索/清空、首次/再次数字编辑、确认窗出现、发送/回包及模式按钮。保留并自动点击原首次警告和写参确认，不把对话停留算作渲染或通信耗时。
+
+检查1419参数级别的SITL数据数量及样例值、单位、描述、收藏字段，实际编辑并写入AIRSPEED_CRUISE后恢复；加载中离开页面时取消旧准备任务，确认模式回读以及已释放页面不回写。保持未解锁；不连接真实设备。SITL参数数量以运行时实际数量核对，等待条件仅要求该固定翼样例至少1000行。
+
+输出 `result.txt` 的PASS/FAIL、`status.txt` 的0/1、`health.csv`的UI定时器间隔与遥测包龄、`parameter-events.csv`的发包与回包时间。页面构建分段另在应用日志“参数表计时”中记录。进入调用返回和数据就绪是不同指标；异步期间仍需等待数据，不应将前者当成完整加载总耗时。脚本会自动确认原警告，因此不代表人在现场阅读确认的耗时。本机TCP结果不代替低速数传验收。
