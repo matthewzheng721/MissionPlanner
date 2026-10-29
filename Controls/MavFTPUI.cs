@@ -36,7 +36,7 @@ namespace MissionPlanner.Controls
                 {
                     if (this.IsDisposed)
                     {
-                        _mavftp = null;
+                        // 切页后后台传输仍使用此客户端，不能清空。
                         return;
                     }
 
@@ -69,7 +69,46 @@ namespace MissionPlanner.Controls
             treeView1.PathSeparator = "/";
         }
 
+        private static readonly SemaphoreSlim ftpOperation = new SemaphoreSlim(1, 1);
+
+        private async Task RunTransferAsync(ProgressReporterDialogue progress)
+        {
+            // 只锁文件页；切到飞行数据后仍可控制。新文件页等旧传输结束再列目录。
+            await ftpOperation.WaitAsync();
+            var completion = new TaskCompletionSource<bool>();
+
+            if (!IsDisposed) Enabled = false;
+            progress.FormClosed += (sender, args) => completion.TrySetResult(true);
+            try
+            {
+                progress.RunBackgroundOperationNonModal(MainV2.instance);
+                await completion.Task;
+            }
+            finally
+            {
+                completion.TrySetResult(true);
+                ftpOperation.Release();
+                progress.Dispose();
+                if (!IsDisposed) Enabled = true;
+            }
+        }
+
         private async void PopulateTreeView()
+        {
+            await ftpOperation.WaitAsync();
+            try
+            {
+                if (!IsDisposed) await PopulateTreeViewCore();
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex);
+                if (!IsDisposed) toolStripStatusLabel1.Text = "读取目录失败：" + ex.Message;
+            }
+            finally { ftpOperation.Release(); }
+        }
+
+        private async Task PopulateTreeViewCore()
         {
             toolStripStatusLabel1.Text = "Updating Folders";
             toolStripProgressBar1.ProgressBar.Style = ProgressBarStyle.Marquee;
@@ -110,6 +149,7 @@ namespace MissionPlanner.Controls
             }
             
 
+            if (IsDisposed) return;
             toolStripStatusLabel1.Text = "Ready";
 
             treeView1.Enabled = true;
@@ -139,6 +179,21 @@ namespace MissionPlanner.Controls
         }
 
         private async void TreeView1_NodeMouseClick(object sender, TreeNodeMouseClickEventArgs e)
+        {
+            await ftpOperation.WaitAsync();
+            try
+            {
+                if (!IsDisposed) await ReadDirectory(e);
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex);
+                if (!IsDisposed) toolStripStatusLabel1.Text = "读取目录失败：" + ex.Message;
+            }
+            finally { ftpOperation.Release(); }
+        }
+
+        private async Task ReadDirectory(TreeNodeMouseClickEventArgs e)
         {
             if (e.Node == null)
                 return;
@@ -276,6 +331,7 @@ namespace MissionPlanner.Controls
                 }
             }
 
+            if (IsDisposed) return;
             TreeView1_NodeMouseClick(null,
                 new TreeNodeMouseClickEventArgs(treeView1.SelectedNode, MouseButtons.Left, 1, 1, 1));
         }
@@ -310,7 +366,7 @@ namespace MissionPlanner.Controls
             var sfd = new FolderBrowserDialog();
             sfd.SelectedPath = Settings.GetUserDataDirectory();
             var dr = sfd.ShowDialog();
-            foreach (ListViewItem listView1SelectedItem in listView1.SelectedItems)
+            foreach (ListViewItem listView1SelectedItem in listView1.SelectedItems.Cast<ListViewItem>().ToArray())
             {
                 toolStripStatusLabel1.Text = "Download " + listView1SelectedItem.Text;
                 if (dr == DialogResult.OK)
@@ -349,8 +405,9 @@ namespace MissionPlanner.Controls
                         }
                         File.WriteAllBytes(file, ms.ToArray());
                     };
-                    prd.RunBackgroundOperationAsync();
+                    await RunTransferAsync(prd);
                     _mavftp.Progress -= progress;
+                    if (IsDisposed) return;
                 }
                 else if (dr == DialogResult.Cancel)
                 {
@@ -358,6 +415,7 @@ namespace MissionPlanner.Controls
                 }
             }
 
+            if (IsDisposed) return;
             toolStripStatusLabel1.Text = "Ready";
         }
 
@@ -373,6 +431,7 @@ namespace MissionPlanner.Controls
                     try
                     {
                         await UploadFile(ofdFileName).ConfigureAwait(true);
+                        if (IsDisposed) return;
                     }
                     catch (Exception exception)
                     {
@@ -382,6 +441,7 @@ namespace MissionPlanner.Controls
                 }
             }
 
+            if (IsDisposed) return;
             TreeView1_NodeMouseClick(null,
                 new TreeNodeMouseClickEventArgs(treeView1.SelectedNode, MouseButtons.Left, 1, 1, 1));
         }
@@ -425,14 +485,15 @@ namespace MissionPlanner.Controls
                     throw new BadCrcException();
                 }
             };
-            prd.RunBackgroundOperationAsync();
+            await RunTransferAsync(prd);
             _mavftp.Progress -= progress;
+            if (IsDisposed) return;
             toolStripStatusLabel1.Text = "Ready";
         }
 
-        private void DeleteToolStripMenuItem_Click(object sender, EventArgs e)
+        private async void DeleteToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            foreach (ListViewItem listView1SelectedItem in listView1.SelectedItems)
+            foreach (ListViewItem listView1SelectedItem in listView1.SelectedItems.Cast<ListViewItem>().ToArray())
             {
                 toolStripStatusLabel1.Text = "Delete " + listView1SelectedItem.Text;
                 ProgressReporterDialogue prd = new ProgressReporterDialogue();
@@ -454,11 +515,13 @@ namespace MissionPlanner.Controls
                         CustomMessageBox.Show("Failed to delete file", text);
                 };
 
-                prd.RunBackgroundOperationAsync();
+                await RunTransferAsync(prd);
             }
 
+            if (IsDisposed) return;
             TreeView1_NodeMouseClick(null,
                 new TreeNodeMouseClickEventArgs(treeView1.SelectedNode, MouseButtons.Left, 1, 1, 1));
+            if (IsDisposed) return;
             toolStripStatusLabel1.Text = "Ready";
         }
 
@@ -467,7 +530,7 @@ namespace MissionPlanner.Controls
             listView1.SelectedItems[0].BeginEdit();
         }
 
-        private void ListView1_AfterLabelEdit(object sender, LabelEditEventArgs e)
+        private async void ListView1_AfterLabelEdit(object sender, LabelEditEventArgs e)
         {
             if (e.Label == null)
                 return;
@@ -489,13 +552,15 @@ namespace MissionPlanner.Controls
                     selectedNodeFullPath + "/" + label, cancel);
             };
 
-            prd.RunBackgroundOperationAsync();
+            await RunTransferAsync(prd);
+            if (IsDisposed) return;
             TreeView1_NodeMouseClick(null,
                 new TreeNodeMouseClickEventArgs(treeView1.SelectedNode, MouseButtons.Left, 1, 1, 1));
+            if (IsDisposed) return;
             toolStripStatusLabel1.Text = "Ready";
         }
 
-        private void NewFolderToolStripMenuItem_Click(object sender, EventArgs e)
+        private async void NewFolderToolStripMenuItem_Click(object sender, EventArgs e)
         {
             string folder = "";
             var dr = InputBox.Show("Folder Name", "Enter folder name", ref folder);
@@ -520,15 +585,17 @@ namespace MissionPlanner.Controls
                     }
                 };
 
-                prd.RunBackgroundOperationAsync();
+                await RunTransferAsync(prd);
             }
 
+            if (IsDisposed) return;
             TreeView1_NodeMouseClick(null,
                 new TreeNodeMouseClickEventArgs(treeView1.SelectedNode, MouseButtons.Left, 1, 1, 1));
+            if (IsDisposed) return;
             toolStripStatusLabel1.Text = "Ready";
         }
 
-        private void GetCRC32ToolStripMenuItem_Click(object sender, EventArgs e)
+        private async void GetCRC32ToolStripMenuItem_Click(object sender, EventArgs e)
         {
             ProgressReporterDialogue prd = new ProgressReporterDialogue();
             CancellationTokenSource cancel = new CancellationTokenSource();
@@ -549,9 +616,9 @@ namespace MissionPlanner.Controls
                     ref crc, cancel);
             };
 
-            prd.RunBackgroundOperationAsync();
+            await RunTransferAsync(prd);
 
-            CustomMessageBox.Show(listView1.SelectedItems[0].Text + ": 0x" + crc.ToString("X"));
+            CustomMessageBox.Show(text + ": 0x" + crc.ToString("X"));
         }
 
         private void ListView1_MouseDown(object sender, MouseEventArgs e)
@@ -579,6 +646,7 @@ namespace MissionPlanner.Controls
                     {
                         treeView1.SelectedNode = node;
 
+                        if (IsDisposed) return;
                         TreeView1_NodeMouseClick(null,
                             new TreeNodeMouseClickEventArgs(treeView1.SelectedNode, MouseButtons.Left, 1, 1, 1));
                         break;
@@ -587,13 +655,13 @@ namespace MissionPlanner.Controls
             }
         }
 
-        private void DownloadBurstToolStripMenuItem_Click(object sender, EventArgs e)
+        private async void DownloadBurstToolStripMenuItem_Click(object sender, EventArgs e)
         {
             toolStripStatusLabel1.Text = "Download ";
             var sfd = new FolderBrowserDialog();
             sfd.SelectedPath = Settings.GetUserDataDirectory();
             var dr = sfd.ShowDialog();
-            foreach (ListViewItem listView1SelectedItem in listView1.SelectedItems)
+            foreach (ListViewItem listView1SelectedItem in listView1.SelectedItems.Cast<ListViewItem>().ToArray())
             {
                 if (dr == DialogResult.OK)
                 {
@@ -633,8 +701,9 @@ namespace MissionPlanner.Controls
                         }
                         File.WriteAllBytes(file, ms.ToArray());
                     };
-                    prd.RunBackgroundOperationAsync();
+                    await RunTransferAsync(prd);
                     _mavftp.Progress -= progress;
+                    if (IsDisposed) return;
                 }
                 else if (dr == DialogResult.Cancel)
                 {
@@ -642,6 +711,7 @@ namespace MissionPlanner.Controls
                 }
             }
 
+            if (IsDisposed) return;
             toolStripStatusLabel1.Text = "Ready";
         }
 

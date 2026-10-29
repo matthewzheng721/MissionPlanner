@@ -1040,62 +1040,55 @@ namespace MissionPlanner
             ComboBox cmbrate = new ComboBox();
             cmbrate.DataSource = Enumerable.Range(0, 200).ToList();
 
-            but.Click += (o, args) =>
+            Button but2 = new Button { Text = "Set All" };
+            var status = new Label { AutoSize = true };
+            // 等待飞控应答放在后台，工具窗口不会阻塞飞行数据页。
+            Func<bool, System.Threading.Tasks.Task> apply = async all =>
             {
-                var rate = double.Parse(cmbrate.Text.ToString());
-                var value = Enum.Parse(typeof(MAVLink.MAVLINK_MSG_ID), cmb.Text.ToString());
-                float rateratio;
-                if (rate <= 0)
-                    rateratio = (float)rate;
-                else
-                    rateratio = 1.0f / (float) rate * 1000000.0f;
+                double rate;
+                if (!double.TryParse(cmbrate.Text, out rate) || double.IsNaN(rate) ||
+                    double.IsInfinity(rate) || rate < -1)
+                {
+                    status.Text = "频率请输入 -1、0 或正数";
+                    return;
+                }
+                var ids = all ? ((IList)cmb.DataSource).Cast<string>().ToArray() : new[] { cmb.Text };
+                float interval = rate <= 0 ? (float)rate : (float)(1000000.0 / rate);
+                var port = MainV2.comPort;
+                byte system = (byte)port.sysidcurrent, component = (byte)port.compidcurrent;
+                but.Enabled = but2.Enabled = false;
+                status.Text = "正在设置…";
                 try
                 {
-                    MainV2.comPort.doCommand((byte) MainV2.comPort.sysidcurrent, (byte) MainV2.comPort.compidcurrent,
-                        MAVLink.MAV_CMD.SET_MESSAGE_INTERVAL, (float) (int) value, rateratio
-                        , 0, 0, 0, 0, 0);
+                    await System.Threading.Tasks.Task.Run(() =>
+                    {
+                        foreach (var name in ids)
+                        {
+                            var id = (MAVLink.MAVLINK_MSG_ID)Enum.Parse(typeof(MAVLink.MAVLINK_MSG_ID), name);
+                            if (!port.doCommand(system, component, MAVLink.MAV_CMD.SET_MESSAGE_INTERVAL,
+                                (float)(int)id, interval, 0, 0, 0, 0, 0, !all))
+                                throw new InvalidOperationException("飞控未接受频率设置");
+                        }
+                    });
+                    if (!form.IsDisposed) status.Text = all ? "全部设置已发送（不等待逐项应答）" : "飞控已确认";
                 }
                 catch (Exception ex)
                 {
-                    CustomMessageBox.Show(ex.ToString(), Strings.ERROR);
+                    if (!form.IsDisposed) status.Text = "设置失败：" + ex.Message;
+                }
+                finally
+                {
+                    if (!form.IsDisposed) but.Enabled = but2.Enabled = true;
                 }
             };
-
-            Button but2 = new Button();
-            but2.Text = "Set All";
-            but2.Click += (o, args) =>
-            {
-                var rate = double.Parse(cmbrate.Text.ToString());
-                float rateratio;
-                if (rate <= 0)
-                    rateratio = (float)rate;
-                else
-                    rateratio = 1.0f / (float)rate * 1000000.0f;
-                ((IList)cmb.DataSource).ForEach(a =>
-               {
-                   var value = Enum.Parse(typeof(MAVLink.MAVLINK_MSG_ID), a.ToString());
-                   try
-                   {
-                       MainV2.comPort.doCommand((byte) MainV2.comPort.sysidcurrent, (byte) MainV2.comPort.compidcurrent,
-                           MAVLink.MAV_CMD.SET_MESSAGE_INTERVAL, (float) (int) value,
-                           rateratio, 0, 0, 0, 0, 0, false);
-                   }
-                   catch (Exception ex)
-                   {
-                       CustomMessageBox.Show(ex.ToString(), Strings.ERROR);
-                   }
-               });
-            };
-
-            //cmb.SelectedIndexChanged += (o, args) => { MAVLink.MAVLINK_MSG_ID.GET_MESSAGE_INTERVAL };
-
+            but.Click += async (o, args) => await apply(false);
+            but2.Click += async (o, args) => await apply(true);
             form.Controls.Add(flp);
-
             flp.Controls.Add(cmb);
             flp.Controls.Add(cmbrate);
             flp.Controls.Add(but);
-
             flp.Controls.Add(but2);
+            flp.Controls.Add(status);
 
             ThemeManager.ApplyThemeTo(form);
             form.Show(owner);

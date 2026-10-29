@@ -64,3 +64,13 @@ $script = (Resolve-Path '.\tools\Test-FlightDataScope.py').Path
 脚本执行模拟器水平校准、大飞机罗盘校准，并以本机TCP差分源生成RTCM1005，验证原解析及MAVLink转发。此测试不代表实物刷写、串口基站、UDP/NTRIP接入或RTK Fixed已验证。未选择任何固件或连接真实设备。`ProjectMotorReadbackTests` 使用真实编码MAVLink回包，验证较早的1300不能确认较新的2000，并覆盖PARAM_FLOAT编码。
 
 输出 `result.txt`、`status.txt`（0成功、1失败/未完成）及 `telemetry.csv`（UI定时器间隔与遥测包龄）。可选 `MP_INITIAL_CAPTURE=1` 会在2000回读后输出主窗口 `handle.txt` 并等待最多90秒，外部完成截图检查后创建同目录 `capture.done` 继续；普通复跑不要设置此变量。结束后关闭测试实例和本轮模拟器。测试使用本机TCP，不能据此保证低速数传耗时或电机实际动作。
+
+## 配置/调试验证
+
+`Test-ConfigScope.py` 由 MP 的 IronPython `-script` 执行，先启动本机固定翼 SITL（TCP 5760），使用独立 `-datadir`。可设置 `MP_CONFIG_OUTPUT` 输出目录，默认当前配置目录的 `config-test`。脚本断言模拟器未解锁，检查五类配置页、Planner 可见设置和实际原速率；不会把用户曾用的 10/3/2/2/1 自动写成当前值。
+
+脚本使用 MAVFTP 页原上传路径传送 1MB 测试文件并检查远端 CRC，同时打开 Inspector，切回飞行数据用模式按钮切换 STABILIZE，通过全部参数表实际单元格编辑及写入按钮修改 AIRSPEED_CRUISE 并回读。测试自动点击原确认窗的“是”，然后恢复原参数。文件保存在模拟器的根目录 `config-transfer.bin`，不上传真实设备。Message Interval 实际设置 ATTITUDE 为 5Hz，并测量切换 Planner 姿态数据组至3Hz后的消息频率，最后恢复原速率。
+
+`result.txt` 的 PASS/FAIL 与 `status.txt` 的0/1说明完成状态。`health.csv` 记录阶段、FTP是否仍运行、遥测包龄、UI定时器实际间隔和模式；`parameter-events.csv` 记录 PARAM_SET 与 PARAM_VALUE 时间，可区分参数表加载/确认停留与实际链路应答时间。本机TCP结果不代表低速数传、外部机场/ADSB/空域服务已经验收。
+
+可选 `MP_CONFIG_CAPTURE=1` 在同一界面调用内核对当前页面，使用实际控件 DrawToBitmap 保存 Planner、全部参数表及 MAVFTP 截图。须肉眼核对生成图片，不把名称当作页面正确性的证明。`MP_CONFIG_TOOLS_ONLY=1` 仅复测消息频率及恢复，结果会注明 tools_only，不代表重跑完整FTP/写参测试。结束后关闭本轮专用开发版及模拟器。

@@ -2174,6 +2174,8 @@ namespace MissionPlanner.ArduPilot.Mavlink
                     return false;
                 Exception ex = null;
 
+                // 多个接收调用可同时分发应答，保护本次上传的待发集合、流位置和报文。
+                var uploadSync = new object();
                 Dictionary<int, uint> sendlist = new Dictionary<int, uint>();
                 for (int i = 0; i < size; i += rwSize)
                     sendlist[i] = 0;
@@ -2189,6 +2191,10 @@ namespace MissionPlanner.ArduPilot.Mavlink
 
                 sub = _mavint.SubscribeToPacketType(MAVLink.MAVLINK_MSG_ID.FILE_TRANSFER_PROTOCOL, message =>
                 {
+                    var batch = new List<MAVLink.mavlink_file_transfer_protocol_t>();
+                    int percent = 0;
+                    lock (uploadSync)
+                    {
                     //Console.WriteLine("G " + DateTime.Now.ToString("O"));
                     if (cancel != null && cancel.IsCancellationRequested)
                     {
@@ -2264,14 +2270,19 @@ namespace MissionPlanner.ArduPilot.Mavlink
                         payload.size = (uint8_t)bytes_read;
                         payload.seq_number = seq_no++;
                         fileTransferProtocol.payload = payload;
-                        _mavint.sendPacket(fileTransferProtocol, _sysid, _compid);
+                        batch.Add(fileTransferProtocol);
                         
-                        Progress?.Invoke(friendlyname + "\n" +
-                            bps + " Bps",
-                            (int)((float)payload.offset / size * 100.0));
-                        timeout.ResetTimeout();
+                        percent = (int)((float)payload.offset / size * 100.0);
                         //Console.WriteLine("S " + DateTime.Now.ToString("O"));
                     });
+                    }
+                    // 网络发送在锁外，避免阻挡同时收到的必要控制应答。
+                    foreach (var packet in batch)
+                    {
+                        _mavint.sendPacket(packet, _sysid, _compid);
+                        timeout.ResetTimeout();
+                    }
+                    Progress?.Invoke(friendlyname + "\n" + bps + " Bps", percent);
                     return true;
                 }, _sysid, _compid);
                 // fill buffer
@@ -2292,7 +2303,9 @@ namespace MissionPlanner.ArduPilot.Mavlink
                         return;
                     }
 
-                    _mavint.sendPacket(fileTransferProtocol, _sysid, _compid);
+                    MAVLink.mavlink_file_transfer_protocol_t retryPacket;
+                    lock (uploadSync) retryPacket = fileTransferProtocol;
+                    _mavint.sendPacket(retryPacket, _sysid, _compid);
                 };
                 var ans = timeout.DoWork();
                 Progress?.Invoke(friendlyname, 100);

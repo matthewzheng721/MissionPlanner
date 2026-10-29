@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using MissionPlanner.ArduPilot;
 using MissionPlanner.Controls;
 using MissionPlanner.Utilities;
@@ -352,63 +353,82 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             }
         }
 
-        private void BUT_writePIDS_Click(object sender, EventArgs e)
-        {
-            var temp = (Hashtable)changes.Clone();
+        private bool writingParameters;
 
-            foreach (string value in temp.Keys)
+        private async void BUT_writePIDS_Click(object sender, EventArgs e)
+        {
+            if (writingParameters) return;
+            var temp = (Hashtable)changes.Clone();
+            var connection = MainV2.comPort;
+            byte system = (byte)connection.sysidcurrent, component = (byte)connection.compidcurrent;
+            writingParameters = true;
+            BUT_writePIDS.Enabled = false;
+            try
             {
-                try
+
+                foreach (string value in temp.Keys)
                 {
-                    if ((float)changes[value] > (float)MainV2.comPort.MAV.param[value] * 2.0f)
-                        if (
-                            CustomMessageBox.Show(value + " has more than doubled the last input. Are you sure?",
-                                "Large Value", MessageBoxButtons.YesNo) == (int)DialogResult.No)
-                        {
-                            try
+                    try
+                    {
+                        if ((float)temp[value] > (float)MainV2.comPort.MAV.param[value] * 2.0f)
+                            if (
+                                CustomMessageBox.Show(value + " has more than doubled the last input. Are you sure?",
+                                    "Large Value", MessageBoxButtons.YesNo) == (int)DialogResult.No)
                             {
-                                // set control as well
-                                var textControls = Controls.Find(value, true);
-                                if (textControls.Length > 0)
+                                try
                                 {
-                                    // restore old value
-                                    textControls[0].Text = MainV2.comPort.MAV.param[value].Value.ToString();
-                                    textControls[0].BackColor = Color.FromArgb(0x43, 0x44, 0x45);
+                                    // set control as well
+                                    var textControls = Controls.Find(value, true);
+                                    if (textControls.Length > 0)
+                                    {
+                                        // restore old value
+                                        textControls[0].Text = MainV2.comPort.MAV.param[value].Value.ToString();
+                                        textControls[0].BackColor = Color.FromArgb(0x43, 0x44, 0x45);
+                                    }
                                 }
+                                catch
+                                {
+                                }
+                                return;
                             }
-                            catch
-                            {
-                            }
+
+                        if (MainV2.comPort.BaseStream == null || !MainV2.comPort.BaseStream.IsOpen)
+                        {
+                            CustomMessageBox.Show("You are not connected", Strings.ERROR);
                             return;
                         }
 
-                    if (MainV2.comPort.BaseStream == null || !MainV2.comPort.BaseStream.IsOpen)
-                    {
-                        CustomMessageBox.Show("You are not connected", Strings.ERROR);
-                        return;
-                    }
+                        if (!await Task.Run(() => connection.setParam(system, component, value, (float)temp[value])))
+                            throw new InvalidOperationException("飞控未确认参数写入");
+                        if (IsDisposed) continue;
+                        // 等待期间发生的新编辑不属于本批，不清除其标记。
+                        if (!changes.ContainsKey(value) || !Equals(changes[value], temp[value])) continue;
 
-                    MainV2.comPort.setParam(value, (float)changes[value]);
+                        changes.Remove(value);
 
-                    changes.Remove(value);
-
-                    try
-                    {
-                        // set control as well
-                        var textControls = Controls.Find(value, true);
-                        if (textControls.Length > 0)
+                        try
                         {
-                            textControls[0].BackColor = Color.FromArgb(0x43, 0x44, 0x45);
+                            // set control as well
+                            var textControls = Controls.Find(value, true);
+                            if (textControls.Length > 0)
+                            {
+                                textControls[0].BackColor = Color.FromArgb(0x43, 0x44, 0x45);
+                            }
+                        }
+                        catch
+                        {
                         }
                     }
                     catch
                     {
+                        CustomMessageBox.Show(string.Format(Strings.ErrorSetValueFailed, value), Strings.ERROR);
                     }
                 }
-                catch
-                {
-                    CustomMessageBox.Show(string.Format(Strings.ErrorSetValueFailed, value), Strings.ERROR);
-                }
+            }
+            finally
+            {
+                writingParameters = false;
+                if (!IsDisposed) BUT_writePIDS.Enabled = true;
             }
         }
 
@@ -417,7 +437,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
         /// </summary>
         /// <param name="sender">The source of the event.</param>
         /// <param name="e">The <see cref="System.EventArgs" /> instance containing the event data.</param>
-        protected void BUT_rerequestparams_Click(object sender, EventArgs e)
+        protected async void BUT_rerequestparams_Click(object sender, EventArgs e)
         {
             if (!MainV2.comPort.BaseStream.IsOpen)
                 return;
@@ -426,7 +446,9 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
             try
             {
-                MainV2.comPort.getParamList();
+                var connection = MainV2.comPort;
+                byte system = (byte)connection.sysidcurrent, component = (byte)connection.compidcurrent;
+                await Task.Run(() => connection.getParamListAsync(system, component, true));
             }
             catch (Exception ex)
             {
@@ -434,13 +456,13 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             }
 
 
+            if (IsDisposed) return;
             ((Control)sender).Enabled = true;
-
 
             Activate();
         }
 
-        private void BUT_refreshpart_Click(object sender, EventArgs e)
+        private async void BUT_refreshpart_Click(object sender, EventArgs e)
         {
             if (!MainV2.comPort.BaseStream.IsOpen)
                 return;
@@ -448,33 +470,31 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             ((Control)sender).Enabled = false;
 
 
-            updateparam(this);
+            var connection = MainV2.comPort;
+            var names = ParameterNames(this).ToArray();
+            // 先在界面线程取得字段名，后台只等待参数应答，不读取控件。
+            await Task.Run(() =>
+            {
+                foreach (var name in names)
+                {
+                    try { connection.GetParam(name); }
+                    catch { }
+                }
+            });
 
+            if (IsDisposed) return;
             ((Control)sender).Enabled = true;
-
 
             Activate();
         }
 
-        private void updateparam(Control parentctl)
+        private System.Collections.Generic.IEnumerable<string> ParameterNames(Control parent)
         {
-            foreach (Control ctl in parentctl.Controls)
+            foreach (Control control in parent.Controls)
             {
-                if (typeof(MavlinkNumericUpDown) == ctl.GetType() || typeof(ComboBox) == ctl.GetType())
-                {
-                    try
-                    {
-                        MainV2.comPort.GetParam(ctl.Name);
-                    }
-                    catch
-                    {
-                    }
-                }
-
-                if (ctl.Controls.Count > 0)
-                {
-                    updateparam(ctl);
-                }
+                if (control.GetType() == typeof(MavlinkNumericUpDown) || control.GetType() == typeof(ComboBox))
+                    yield return control.Name;
+                foreach (var name in ParameterNames(control)) yield return name;
             }
         }
 

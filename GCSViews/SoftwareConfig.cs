@@ -145,147 +145,26 @@ namespace MissionPlanner.GCSViews
             {
                 BackstageViewPage start = null;
 
-                if (gotAllParams)
+                // 本项目只提供已确认的配置页；参数未齐时继续显示原加载页。
+                if (MainV2.comPort.BaseStream.IsOpen && gotAllParams)
                 {
-                    if (MainV2.comPort.BaseStream.IsOpen)
-                    {
-                        if (MainV2.comPort.MAV.cs.firmware == Firmwares.ArduCopter2)
-                        {
-                            if (MainV2.DisplayConfiguration.displayGeoFence)
-                            {
-                                AddBackstageViewPage(typeof(ConfigAC_Fence), Strings.GeoFence);
-                            }
-                        }
+                    if (MainV2.comPort.MAV.cs.firmware == Firmwares.ArduCopter2)
+                        start = AddBackstageViewPage(typeof(ConfigArducopter), Strings.ExtendedTuning);
+                    else if (MainV2.comPort.MAV.cs.firmware == Firmwares.ArduPlane)
+                        start = AddBackstageViewPage(typeof(ConfigArducopter), "QP " + Strings.ExtendedTuning);
 
-                        if (MainV2.comPort.MAV.cs.firmware == Firmwares.ArduCopter2)
-                        {
-                            if (MainV2.DisplayConfiguration.displayBasicTuning)
-                            {
-                                start = AddBackstageViewPage(typeof(ConfigSimplePids), Strings.BasicTuning);
-                            }
-
-                            if (MainV2.DisplayConfiguration.displayExtendedTuning)
-                            {
-                                AddBackstageViewPage(typeof(ConfigArducopter), Strings.ExtendedTuning);
-                            }
-                        }
-
-                        if (MainV2.comPort.MAV.cs.firmware == Firmwares.ArduPlane)
-                        {
-                            if (MainV2.DisplayConfiguration.displayBasicTuning)
-                            {
-                                start = AddBackstageViewPage(typeof(ConfigArduplane), Strings.BasicTuning);
-                            }
-
-                            if (MainV2.DisplayConfiguration.displayExtendedTuning)
-                            {
-                                AddBackstageViewPage(typeof(ConfigArducopter), "QP " + Strings.ExtendedTuning);
-                            }
-                        }
-
-                        if (MainV2.comPort.MAV.cs.firmware == Firmwares.ArduRover)
-                        {
-                            start = AddBackstageViewPage(typeof(ConfigArdurover), Strings.BasicTuning);
-                        }
-
-                        if (MainV2.comPort.MAV.cs.firmware == Firmwares.ArduTracker)
-                        {
-                            start = AddBackstageViewPage(typeof(ConfigAntennaTracker), Strings.ExtendedTuning);
-                        }
-
-                        if (MainV2.DisplayConfiguration.displayStandardParams)
-                        {
-                            AddBackstageViewPage(typeof(ConfigFriendlyParams), Strings.StandardParams);
-                        }
-
-                        if (MainV2.DisplayConfiguration.displayAdvancedParams)
-                        {
-                            AddBackstageViewPage(typeof(ConfigFriendlyParamsAdv), Strings.AdvancedParams, null, true);
-                        }
-
-                        if (!Program.MONO && ConfigOSD.IsApplicable() && MainV2.DisplayConfiguration.displayOSD)
-                        {
-                            AddBackstageViewPage(typeof(ConfigOSD), Strings.OnboardOSD);
-                        }
-
-                        if (MainV2.DisplayConfiguration.displayMavFTP)
-                        {
-                            if ((MainV2.comPort.MAV.cs.capabilities & (int)MAVLink.MAV_PROTOCOL_CAPABILITY.FTP) > 0)
-                            {
-                                AddBackstageViewPage(typeof(MavFTPUI), Strings.MAVFtp);
-                            }
-                        }
-
-                        if (MainV2.DisplayConfiguration.displayUserParam)
-                        {
-                            AddBackstageViewPage(typeof(ConfigUserDefined), Strings.User_Params);
-                        }
-                    }
+                    if ((MainV2.comPort.MAV.cs.capabilities & (int)MAVLink.MAV_PROTOCOL_CAPABILITY.FTP) > 0)
+                        AddBackstageViewPage(typeof(MavFTPUI), Strings.MAVFtp);
+                    AddBackstageViewPage(typeof(ConfigUserDefined), Strings.User_Params);
                 }
-
-                if (MainV2.DisplayConfiguration.displayFullParamList)
-                {
-                    if(!MainV2.comPort.BaseStream.IsOpen || gotAllParams)
-                        AddBackstageViewPage(typeof(ConfigRawParams), Strings.FullParameterList, null, false);
-                }
-                if (MainV2.comPort.BaseStream.IsOpen)
-                {
-                    if (MainV2.comPort.MAV.cs.firmware == Firmwares.Ateryx)
-                    {
-                        start = AddBackstageViewPage(typeof(ConfigFlightModes), Strings.FlightModes);
-                        AddBackstageViewPage(typeof(ConfigAteryxSensors), "Ateryx Zero Sensors");
-                        AddBackstageViewPage(typeof(ConfigAteryx), "Ateryx Pids");
-                    }
-
-                    if (!gotAllParams)
-                    {
-                        if (start == null)
-                            start = AddBackstageViewPage(typeof(ConfigParamLoading), Strings.Loading);
-                        else
-                            AddBackstageViewPage(typeof(ConfigParamLoading), Strings.Loading);
-                    }
-
-                    if (MainV2.DisplayConfiguration.displayPlannerSettings)
-                    {
-                        AddBackstageViewPage(typeof(ConfigPlanner), Strings.Planner);
-                    }
-                }
+                if (!MainV2.comPort.BaseStream.IsOpen || gotAllParams)
+                    AddBackstageViewPage(typeof(ConfigRawParams), Strings.FullParameterList, null, false);
                 else
-                {
-                    if (MainV2.DisplayConfiguration.displayPlannerSettings)
-                    {
-                        start = AddBackstageViewPage(typeof(ConfigPlanner), Strings.Planner);
-                    }
-                }
+                    start = AddBackstageViewPage(typeof(ConfigParamLoading), Strings.Loading);
 
-                // Add custrom pages set up by plugins
-                foreach (var item in pluginViewPages)
-                {
-
-                    // go through all options expect disconnected since there is no meaning for sw config in disconnected state
-                    if (item.options.HasFlag(pageOptions.isConnected) && !isConnected)
-                        continue;
-                    if (item.options.HasFlag(pageOptions.isTracker) && !isTracker)
-                        continue;
-                    if (item.options.HasFlag(pageOptions.isCopter) && !isCopter)
-                        continue;
-                    if (item.options.HasFlag(pageOptions.isCopter35plus) && !isCopter35plus)
-                        continue;
-                    if (item.options.HasFlag(pageOptions.isHeli) && !isHeli)
-                        continue;
-                    if (item.options.HasFlag(pageOptions.isQuadPlane) && !isQuadPlane)
-                        continue;
-                    if (item.options.HasFlag(pageOptions.isPlane) && !isPlane)
-                        continue;
-                    if (item.options.HasFlag(pageOptions.isRover) && !isRover)
-                        continue;
-                    if (item.options.HasFlag(pageOptions.gotAllParams) && !gotAllParams)
-                        continue;
-
-                    AddBackstageViewPage(item.page, item.headerText);
-                }
-
-
+                var planner = AddBackstageViewPage(typeof(ConfigPlanner), Strings.Planner);
+                if (start == null)
+                    start = planner;
 
                 // apply theme before trying to display it
                 ThemeManager.ApplyThemeTo(this);

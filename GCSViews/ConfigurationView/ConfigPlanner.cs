@@ -28,213 +28,55 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             startup = true;
 
             InitializeComponent();
-            CMB_Layout.Items.Add(DisplayNames.Basic);
-            CMB_Layout.Items.Add(DisplayNames.Advanced);
-            CMB_Layout.Items.Add(DisplayNames.Custom);
-
             txt_log_dir.TextChanged += OnLogDirTextChanged;
-
-            CMB_severity.Items.Add(SeverityLevel.Emergency);
-            CMB_severity.Items.Add(SeverityLevel.Alert);
-            CMB_severity.Items.Add(SeverityLevel.Critical);
-            CMB_severity.Items.Add(SeverityLevel.Error);
-            CMB_severity.Items.Add(SeverityLevel.Warning);
-            CMB_severity.Items.Add(SeverityLevel.Notice);
-            CMB_severity.Items.Add(SeverityLevel.Info);
-            CMB_severity.Items.Add(SeverityLevel.Debug);
-
-            cmb_secondarydisplaystyle.DataSource = Enum.GetNames(typeof(Maps.GMapMarkerBase.InactiveDisplayStyleEnum));
-            cmb_secondarydisplaystyle.Text = Settings.Instance.GetString(
-                "GMapMarkerBase_InactiveDisplayStyle",
-                Maps.GMapMarkerBase.InactiveDisplayStyleEnum.Normal.ToString()
-            );
+            // 保持原布局，只留下已确认功能需要的设置，不初始化隐藏的视频、语音和布局选项。
+            var retained = new HashSet<Control>
+            {
+                label101, label102, label103, label104, label107, label33, label99,
+                CMB_rateattitude, CMB_rateposition, CMB_ratestatus, CMB_raterc, CMB_ratesensors,
+                label94, CMB_osdcolor, CHK_hudshow, label98, CMB_speedunits,
+                label97, CMB_distunits, label6, CMB_altunits,
+                label23, NUM_tracklength, label1, CHK_maprotation, label2, CHK_disttohomeflightdata,
+                label3, txt_log_dir, BUT_logdirbrowse,
+                label13, CMB_mapCache, BUT_mapCacheDir,
+                CHK_showairports, chk_ADSB, chk_tfr, chk_shownofly,
+                chk_displaycog, label10, chk_displayheading, chk_displaynavbearing,
+                chk_displayradius, chk_displaytarget, num_linelength, label11, chk_displaytooltip
+            };
+            foreach (Control control in Controls)
+                control.Visible = retained.Contains(control);
+            if (Thread.CurrentThread.CurrentUICulture.Name.StartsWith("zh"))
+                label102.Text = "姿态";
         }
 
-
-        // Called every time that this control is made current in the backstage view
         public void Activate()
         {
-            startup = true; // flag to ignore changes while we programatically populate controls
-            if (MainV2.DisplayConfiguration.displayName == DisplayNames.Advanced)
-            {
-                CMB_Layout.SelectedIndex = 1;
-            }
-            else if (MainV2.DisplayConfiguration.displayName == DisplayNames.Basic)
-            {
-                CMB_Layout.SelectedIndex = 0;
-            }
-            else if (MainV2.DisplayConfiguration.displayName == DisplayNames.Custom)
-            {
-                CMB_Layout.SelectedIndex = 2;
-            }
-            else
-            {
-                CMB_Layout.SelectedIndex = 0;
-            }
-
-            if (!MainV2.DisplayConfiguration.displayPlannerLayout)
-            {
-                label5.Visible = false;
-                CMB_Layout.Visible = false;
-            }
-
+            startup = true;
             CMB_osdcolor.DataSource = Enum.GetNames(typeof(KnownColor));
-
-            // set distance/speed unit states
             CMB_distunits.DataSource = Enum.GetNames(typeof(distances));
             CMB_speedunits.DataSource = Enum.GetNames(typeof(speeds));
             CMB_altunits.DataSource = Enum.GetNames(typeof(altitudes));
-
-            CMB_theme.DataSource = ThemeManager.ThemeNames;
-
-            CMB_theme.Text = ThemeManager.thmColor.strThemeName;
-
-            num_gcsid.Value = MAVLinkInterface.gcssysid;
-
-            // setup severity selection
-            if (Settings.Instance["severity"] != null)
-            {
-                CMB_severity.SelectedIndex = Settings.Instance.GetInt32("severity");
-            }
-            else
-            {
-                CMB_severity.SelectedIndex = 4;  // SeverityLevel.Warning
-                Settings.Instance["severity"] = CMB_severity.SelectedIndex.ToString();
-            }
-
-            // setup language selection
-            var cultureCodes = new[]
-            {
-                "en-US", "zh-Hans", "zh-TW", "ru-RU", "Fr", "Pl", "it-IT", "es-ES", "de-DE", "ja-JP", "id-ID", "ko-KR",
-                "ar", "pt", "tr", "ru-KZ", "uk"
-            };
-
-            _languages = cultureCodes
-                .Select(CultureInfoEx.GetCultureInfo)
-                .Where(c => c != null)
-                .ToList();
-
-            CMB_language.DisplayMember = "DisplayName";
-            CMB_language.DataSource = _languages;
-            var currentUiCulture = Thread.CurrentThread.CurrentUICulture;
-
-            for (var i = 0; i < _languages.Count; i++)
-            {
-                if (currentUiCulture.IsChildOf(_languages[i]))
-                {
-                    try
-                    {
-                        CMB_language.SelectedIndex = i;
-                    }
-                    catch
-                    {
-                    }
-                    break;
-                }
-            }
-
-            // setup up camera button states
-            if (MainV2.cam != null)
-            {
-                BUT_videostart.Enabled = false;
-                CHK_hudshow.Checked = FlightData.myhud.hudon;
-            }
-            else
-            {
-                BUT_videostart.Enabled = true;
-            }
-
-            // setup speech states
-            SetCheckboxFromConfig("speechenable", CHK_enablespeech);
-            SetCheckboxFromConfig("speechwaypointenabled", CHK_speechwaypoint);
-            SetCheckboxFromConfig("speechmodeenabled", CHK_speechmode);
-            SetCheckboxFromConfig("speechcustomenabled", CHK_speechcustom);
-            SetCheckboxFromConfig("speechbatteryenabled", CHK_speechbattery);
-            SetCheckboxFromConfig("speechaltenabled", CHK_speechaltwarning);
-            SetCheckboxFromConfig("speecharmenabled", CHK_speecharmdisarm);
-            SetCheckboxFromConfig("speechlowspeedenabled", CHK_speechlowspeed);
-            SetCheckboxFromConfig("beta_updates", CHK_beta);
-            SetCheckboxFromConfig("password_protect", CHK_Password);
             SetCheckboxFromConfig("showairports", CHK_showairports);
             SetCheckboxFromConfig("enableadsb", chk_ADSB);
-            SetCheckboxFromConfig("norcreceiver", chk_norcreceiver);
             SetCheckboxFromConfig("showtfr", chk_tfr);
-            SetCheckboxFromConfig("autoParamCommit", CHK_AutoParamCommit);
             SetCheckboxFromConfig("ShowNoFly", chk_shownofly);
-            SetCheckboxFromConfig("Params_BG", CHK_params_bg);
-            SetCheckboxFromConfig("SlowMachine", chk_slowMachine);
-            SetCheckboxFromConfig("speech_armed_only", CHK_speechArmedOnly);
-
-            // this can't fail because it set at startup
             NUM_tracklength.Value = Settings.Instance.GetInt32("NUM_tracklength", 200);
-
-            // get wps on connect
-            SetCheckboxFromConfig("loadwpsonconnect", CHK_loadwponconnect);
-
-            // setup other config state
-            SetCheckboxFromConfig("CHK_resetapmonconnect", CHK_resetapmonconnect);
-            SetCheckboxFromConfig("CHK_rtsresetesp32", CHK_rtsresetesp32);
-
             CMB_rateattitude.Text = MainV2.comPort.MAV.cs.rateattitude.ToString();
             CMB_rateposition.Text = MainV2.comPort.MAV.cs.rateposition.ToString();
             CMB_raterc.Text = MainV2.comPort.MAV.cs.raterc.ToString();
             CMB_ratestatus.Text = MainV2.comPort.MAV.cs.ratestatus.ToString();
             CMB_ratesensors.Text = MainV2.comPort.MAV.cs.ratesensors.ToString();
-
-            SetCheckboxFromConfig("analyticsoptout", chk_analytics);
-
-            SetCheckboxFromConfig("CHK_GDIPlus", CHK_GDIPlus);
             SetCheckboxFromConfig("CHK_maprotation", CHK_maprotation);
-
             SetCheckboxFromConfig("CHK_disttohomeflightdata", CHK_disttohomeflightdata);
-
-            CHK_AutoParamCommit.Visible = MainV2.DisplayConfiguration.displayParamCommitButton;
-
-            //set hud color state
-            var hudcolor = Settings.Instance["hudcolor"];
-            if (hudcolor != null)
-            {
-                var index = CMB_osdcolor.Items.IndexOf(hudcolor ?? "White");
-                try
-                {
-                    CMB_osdcolor.SelectedIndex = index;
-                }
-                catch
-                {
-                }
-            }
-
-
+            CHK_hudshow.Checked = FlightData.myhud.hudon;
+            CMB_osdcolor.SelectedItem = Settings.Instance["hudcolor"] ?? "White";
             if (Settings.Instance["distunits"] != null)
-                CMB_distunits.Text = Settings.Instance["distunits"].ToString();
+                CMB_distunits.Text = Settings.Instance["distunits"];
             if (Settings.Instance["speedunits"] != null)
-                CMB_speedunits.Text = Settings.Instance["speedunits"].ToString();
+                CMB_speedunits.Text = Settings.Instance["speedunits"];
             if (Settings.Instance["altunits"] != null)
-                CMB_altunits.Text = Settings.Instance["altunits"].ToString();
-
-            try
-            {
-                if (Settings.Instance["video_device"] != null)
-                {
-                    CMB_videosources_Click(this, null);
-                    var device = Settings.Instance.GetInt32("video_device");
-                    if(CMB_videosources.Items.Count > device)
-                        CMB_videosources.SelectedIndex = device;
-
-                    if (Settings.Instance["video_options"] != "" && CMB_videosources.Text != "")
-                    {
-                        CMB_videoresolutions.SelectedIndex = Settings.Instance.GetInt32("video_options");
-                    }
-                }
-            }
-            catch
-            {
-            }
-
-
+                CMB_altunits.Text = Settings.Instance["altunits"];
             txt_log_dir.Text = Settings.Instance.LogDir;
-
-            // Setup aircraft icon settings
             chk_displaycog.Checked = Settings.Instance.GetBoolean("GMapMarkerBase_DisplayCOG", true);
             chk_displayheading.Checked = Settings.Instance.GetBoolean("GMapMarkerBase_DisplayHeading", true);
             chk_displaynavbearing.Checked = Settings.Instance.GetBoolean("GMapMarkerBase_DisplayNavBearing", true);
@@ -242,16 +84,8 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             chk_displaytarget.Checked = Settings.Instance.GetBoolean("GMapMarkerBase_DisplayTarget", true);
             chk_displaytooltip.Checked = Settings.Instance.GetString("mapicondesc", "") != "";
             num_linelength.Value = Settings.Instance.GetInt32("GMapMarkerBase_Length", 500);
-
             CMB_mapCache.DataSource = Enum.GetNames(typeof(GMap.NET.AccessMode));
-            try
-            {
-                CMB_mapCache.SelectedIndex = CMB_mapCache.Items.IndexOf(Settings.Instance["mapCache"] ?? GMap.NET.GMaps.Instance.Mode.ToString());
-            }
-            catch
-            {
-            }
-
+            CMB_mapCache.SelectedItem = Settings.Instance["mapCache"] ?? GMap.NET.GMaps.Instance.Mode.ToString();
             startup = false;
         }
 

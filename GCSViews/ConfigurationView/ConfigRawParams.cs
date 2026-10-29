@@ -254,10 +254,19 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             }
         }
 
-        private void BUT_writePIDS_Click(object sender, EventArgs e)
+        private bool writingParameters;
+
+        private async void BUT_writePIDS_Click(object sender, EventArgs e)
         {
+            if (writingParameters) return;
+            Params.EndEdit();
+            // 本批只写点击时的值；等待应答期间的新编辑保留在待写列表。
+            var snapshot = _changes.Keys.Cast<string>().ToDictionary(k => k, k => (double)_changes[k]);
+            var port = MainV2.comPort;
+            byte system = (byte)port.sysidcurrent;
+            byte component = (byte)port.compidcurrent;
             // sort with enable at the bottom - this ensures params are set before the function is disabled
-            var temp = _changes.Keys.Cast<string>().ToList();
+            var temp = snapshot.Keys.ToList();
 
             temp.SortENABLE();
 
@@ -272,124 +281,137 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                 // List to track successfully saved parameters
                 List<string> savedParams = new List<string>();
 
-                foreach (string value in temp)
-                {
-                    if (MainV2.comPort.BaseStream == null || !MainV2.comPort.BaseStream.IsOpen)
+                    foreach (string value in temp)
                     {
-                        CustomMessageBox.Show("You are not connected", Strings.ERROR);
-                        return;
+                        if (MainV2.comPort.BaseStream == null || !MainV2.comPort.BaseStream.IsOpen)
+                        {
+                            CustomMessageBox.Show("You are not connected", Strings.ERROR);
+                            return;
+                        }
+
+                        // Get the previous value of the param to display in 'param change info'
+                        // (a better way would be to get the value somewhere from inside the code, insted of recieving it over mavlink)
+                        string previousValue = MainV2.comPort.MAV.param[value].ToString();
+                        // new value of param
+                        double newValue = snapshot[value];
+
+                        // Add the parameter, previous and new values to the list for 'param change info'
+                        // remember, the 'value' here is key of param, while prev and new are actual values of param
+                        savedParams.Add($"{value}: {previousValue} -> {newValue}");
                     }
 
-                    // Get the previous value of the param to display in 'param change info'
-                    // (a better way would be to get the value somewhere from inside the code, insted of recieving it over mavlink)
-                    string previousValue = MainV2.comPort.MAV.param[value].ToString();
-                    // new value of param
-                    double newValue = (double)_changes[value];
+                    // Join the saved parameters list to a string
+                    string savedParamsMessage = string.Join(Environment.NewLine, savedParams);
 
-                    // Add the parameter, previous and new values to the list for 'param change info'
-                    // remember, the 'value' here is key of param, while prev and new are actual values of param
-                    savedParams.Add($"{value}: {previousValue} -> {newValue}");
-                }
-
-                // Join the saved parameters list to a string
-                string savedParamsMessage = string.Join(Environment.NewLine, savedParams);
-
-                // Ask the user for confirmation showing detailed changes
-                if (CustomMessageBox.Show($"You are about to change {savedParams.Count} parameters. Please review the changes below:\n\n{savedParamsMessage}\n\nDo you want to proceed?", "Confirm Parameter Changes",
-        CustomMessageBox.MessageBoxButtons.YesNo, CustomMessageBox.MessageBoxIcon.Information) !=
-    CustomMessageBox.DialogResult.Yes)
-                    return;
-            }
-            else if (temp.Count > maxdisplay)
-            {
-                // Ask the user for confirmation without listing individual changes
-                if (CustomMessageBox.Show($"You are about to change {temp.Count} parameters. Are you sure you want to proceed?", "Confirm Parameter Changes",
+                    // Ask the user for confirmation showing detailed changes
+                    if (CustomMessageBox.Show($"You are about to change {savedParams.Count} parameters. Please review the changes below:\n\n{savedParamsMessage}\n\nDo you want to proceed?", "Confirm Parameter Changes",
             CustomMessageBox.MessageBoxButtons.YesNo, CustomMessageBox.MessageBoxIcon.Information) !=
         CustomMessageBox.DialogResult.Yes)
-                    return;
-            }
+                        return;
+                }
+                else if (temp.Count > maxdisplay)
+                {
+                    // Ask the user for confirmation without listing individual changes
+                    if (CustomMessageBox.Show($"You are about to change {temp.Count} parameters. Are you sure you want to proceed?", "Confirm Parameter Changes",
+                CustomMessageBox.MessageBoxButtons.YesNo, CustomMessageBox.MessageBoxIcon.Information) !=
+            CustomMessageBox.DialogResult.Yes)
+                        return;
+                }
 
 
-            foreach (string value in temp)
-            {
+                writingParameters = true;
+                BUT_writePIDS.Enabled = false;
                 try
                 {
-                    if (MainV2.comPort.BaseStream == null || !MainV2.comPort.BaseStream.IsOpen)
-                    {
-                        CustomMessageBox.Show("Your are not connected", Strings.ERROR);
-                        return;
-                    }
-
-                    MainV2.comPort.setParam(value, (double)_changes[value]);
-                    //check if reboot required
-                    if (ParameterMetaDataRepository.GetParameterRebootRequired(value, MainV2.comPort.MAV.cs.firmware.ToString()))
-                    {
-                        reboot = true;
-                    }
+                foreach (string value in temp)
+                {
                     try
                     {
-                        // set control as well
-                        var textControls = Controls.Find(value, true);
-                        if (textControls.Length > 0)
+                        if (MainV2.comPort.BaseStream == null || !MainV2.comPort.BaseStream.IsOpen)
                         {
-                            ThemeManager.ApplyThemeTo(textControls[0]);
+                            CustomMessageBox.Show("Your are not connected", Strings.ERROR);
+                            return;
                         }
-                    }
-                    catch
-                    {
-                    }
 
-                    try
-                    {
-                        // set param table as well
-                        foreach (DataGridViewRow row in Params.Rows)
+                        if (!await Task.Run(() => port.setParam(system, component, value, snapshot[value])))
+                            throw new InvalidOperationException("飞控未确认参数写入");
+                        // 切页后继续写完本批快照，但不再访问已释放的表格。
+                        //check if reboot required
+                        if (ParameterMetaDataRepository.GetParameterRebootRequired(value, MainV2.comPort.MAV.cs.firmware.ToString()))
                         {
-                            if (row.Cells[Command.Index].Value.ToString() == value)
+                            reboot = true;
+                        }
+                        try
+                        {
+                            // set control as well
+                            var textControls = IsDisposed ? new Control[0] : Controls.Find(value, true);
+                            if (textControls.Length > 0)
                             {
-                                row.Cells[Value.Index].Style.BackColor = ThemeManager.ControlBGColor;
-                                _changes.Remove(value);
-                                break;
+                                ThemeManager.ApplyThemeTo(textControls[0]);
                             }
                         }
+                        catch
+                        {
+                        }
+
+                        try
+                        {
+                            // set param table as well
+                            foreach (DataGridViewRow row in IsDisposed ? new DataGridViewRow[0] : Params.Rows.Cast<DataGridViewRow>().ToArray())
+                            {
+                                if (row.Cells[Command.Index].Value.ToString() == value &&
+                                    _changes.ContainsKey(value) && (double)_changes[value] == snapshot[value])
+                                {
+                                    row.Cells[Value.Index].Style.BackColor = ThemeManager.ControlBGColor;
+                                    _changes.Remove(value);
+                                    break;
+                                }
+                            }
+                        }
+                        catch
+                        {
+                        }
                     }
                     catch
                     {
+                        error++;
+                        CustomMessageBox.Show("Set " + value + " Failed");
                     }
                 }
-                catch
-                {
-                    error++;
-                    CustomMessageBox.Show("Set " + value + " Failed");
-                }
-            }
 
-            if (error > 0)
-                CustomMessageBox.Show("Not all parameters successfully saved.", "Saved");
-            else if (temp.Count>0)
-                CustomMessageBox.Show($"{temp.Count} parameters successfully saved.", "Saved");
-            else
-                CustomMessageBox.Show("No parameters were changed.", "No changes");
-
-            //Check if reboot is required
-            if (reboot)
-            {
-               CustomMessageBox.Show("Reboot is required for some parameters to take effect.", "Reboot Required");
-            }
-
-            if (MainV2.comPort.MAV.param.TotalReceived != MainV2.comPort.MAV.param.TotalReported )
-            {
-                if (MainV2.comPort.MAV.cs.armed)
-                {
-                    CustomMessageBox.Show("The number of available parameters changed, until full param refresh is done, some parameters will not be available.", "Params");
-                    //Hack the number of reported params to keep params list available
-                    MainV2.comPort.MAV.param.TotalReported = MainV2.comPort.MAV.param.TotalReceived;
-                }
+                if (error > 0)
+                    CustomMessageBox.Show("Not all parameters successfully saved.", "Saved");
+                else if (temp.Count>0)
+                    CustomMessageBox.Show($"{temp.Count} parameters successfully saved.", "Saved");
                 else
+                    CustomMessageBox.Show("No parameters were changed.", "No changes");
+
+                //Check if reboot is required
+                if (reboot)
                 {
-                    CustomMessageBox.Show("The number of available parameters changed. A full param refresh will be done to show all params.", "Params");
-                    //Click on refresh button
-                    BUT_rerequestparams_Click(BUT_rerequestparams, null);
+                   CustomMessageBox.Show("Reboot is required for some parameters to take effect.", "Reboot Required");
                 }
+
+                if (MainV2.comPort.MAV.param.TotalReceived != MainV2.comPort.MAV.param.TotalReported )
+                {
+                    if (MainV2.comPort.MAV.cs.armed)
+                    {
+                        CustomMessageBox.Show("The number of available parameters changed, until full param refresh is done, some parameters will not be available.", "Params");
+                        //Hack the number of reported params to keep params list available
+                        MainV2.comPort.MAV.param.TotalReported = MainV2.comPort.MAV.param.TotalReceived;
+                    }
+                    else
+                    {
+                        CustomMessageBox.Show("The number of available parameters changed. A full param refresh will be done to show all params.", "Params");
+                        //Click on refresh button
+                        if (!IsDisposed) BUT_rerequestparams_Click(BUT_rerequestparams, null);
+                    }
+                }
+            }
+            finally
+            {
+                writingParameters = false;
+                if (!IsDisposed) BUT_writePIDS.Enabled = true;
             }
         }
 
@@ -418,7 +440,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             }
         }
 
-        private void BUT_rerequestparams_Click(object sender, EventArgs e)
+        private async void BUT_rerequestparams_Click(object sender, EventArgs e)
         {
             if (!MainV2.comPort.BaseStream.IsOpen)
                 return;
@@ -430,7 +452,9 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
                 try
                 {
-                    MainV2.comPort.getParamList();
+                    var connection = MainV2.comPort;
+                    byte system = (byte)connection.sysidcurrent, component = (byte)connection.compidcurrent;
+                    await Task.Run(() => connection.getParamListAsync(system, component, true));
                 }
                 catch (Exception ex)
                 {
@@ -439,6 +463,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                 }
 
 
+                if (IsDisposed) return;
                 ((Control)sender).Enabled = true;
 
                 startup = true;
