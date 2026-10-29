@@ -6029,7 +6029,8 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
                 };
                 OnPacketReceived += handler;
 
-                _OnPacketReceived.GetInvocationList().ForEach(a => log.Info(a.GetMethodInfo().ToJSON()));
+                // 仅记录订阅方法名称，避免序列化脚本动态方法时阻塞日志下载。
+                _OnPacketReceived.GetInvocationList().ForEach(a => log.Info(a.Method.Name));
                 
 
                 mavlink_log_request_data_t req = new mavlink_log_request_data_t();

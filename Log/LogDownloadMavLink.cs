@@ -205,56 +205,32 @@ namespace MissionPlanner.Log
             var fn = await MainV2.comPort.GetLog(MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid, no)
                 .ConfigureAwait(false);
 
-            GC.Collect();
-            status = SerialStatus.Done;
+            // 先读取临时文件并关闭流，再一次性发布 BIN，避免后台缩略图读取占用中间文件。
+            logfile = fn;
+            DateTime logtime;
+            using (var buffer = new DFLogBuffer(fn))
+                logtime = buffer.dflog.gpsstarttime;
 
-            logfile = Settings.Instance.LogDir + Path.DirectorySeparatorChar
-                                               + MainV2.comPort.MAV.aptype.ToString() + Path.DirectorySeparatorChar
-                                               + MainV2.comPort.MAV.sysid + Path.DirectorySeparatorChar + no + " " +
-                                               MakeValidFileName(fileName) + ".bin";
-
-            // make log dir
-            Directory.CreateDirectory(Path.GetDirectoryName(logfile));
-
-            log.Info("about to move " + fn + " to: " + logfile);
+            string directory = Path.Combine(Settings.Instance.LogDir,
+                MainV2.comPort.MAV.aptype.ToString(), MainV2.comPort.MAV.sysid.ToString());
+            Directory.CreateDirectory(directory);
+            string name = logtime == DateTime.MinValue
+                ? no + " " + MakeValidFileName(fileName)
+                : logtime.ToString("yyyy-MM-dd HH-mm-ss");
+            string destination = Path.Combine(directory, name + ".bin");
             try
             {
-                File.Move(fn, logfile);
+                // File.Move 不覆盖同名日志；失败时保留原下载文件并提示其实际位置。
+                File.Move(fn, destination);
+                logfile = destination;
             }
-            catch
+            catch (Exception ex)
             {
-                CustomMessageBox.Show(Strings.ErrorRenameFile + " " + logfile + "\nto " + logfile,
-                    Strings.ERROR);
+                log.Error("日志文件保存失败：" + fn + " -> " + destination + " HResult=" + ex.HResult, ex);
+                CustomMessageBox.Show(Strings.ErrorRenameFile + " " + fn + "\nto " + destination +
+                    "\n下载文件已保留于：" + fn, Strings.ERROR);
             }
-
-            // rename file if needed
-            log.Info("about to GetFirstGpsTime: " + logfile);
-            // get gps time of assci log
-            var dflb = new DFLogBuffer(logfile);
-            DateTime logtime = dflb.dflog.gpsstarttime;
-            dflb.Clear();
-            GC.Collect();
-
-            // rename log is we have a valid gps time
-            if (logtime != DateTime.MinValue)
-            {
-                string newlogfilename = Settings.Instance.LogDir + Path.DirectorySeparatorChar
-                                                                 + MainV2.comPort.MAV.aptype.ToString() +
-                                                                 Path.DirectorySeparatorChar
-                                                                 + MainV2.comPort.MAV.sysid +
-                                                                 Path.DirectorySeparatorChar +
-                                                                 logtime.ToString("yyyy-MM-dd HH-mm-ss") + ".bin";
-                try
-                {
-                    File.Move(logfile, newlogfilename);
-                    logfile = newlogfilename;
-                }
-                catch
-                {
-                    CustomMessageBox.Show(Strings.ErrorRenameFile + " " + logfile + "\nto " + newlogfilename,
-                        Strings.ERROR);
-                }
-            }
+            status = SerialStatus.Done;
 
             MainV2.comPort.Progress -= ComPort_Progress;
 
