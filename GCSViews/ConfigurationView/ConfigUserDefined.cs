@@ -75,6 +75,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                     var opt = ParameterMetaDataRepository.GetParameterRange(option,ref min,ref max, MainV2.comPort.MAV.cs.firmware.ToString());
                     var num = new MavlinkNumericUpDown();
                     num.setup((float)min,(float)max,1,1,option, MainV2.comPort.MAV.param);
+                    tableLayoutPanel1.Controls.Add(num);
                 } else { 
                     var cmb = new MavlinkComboBox();
                     tableLayoutPanel1.Controls.Add(cmb);
