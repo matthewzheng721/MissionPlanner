@@ -237,6 +237,7 @@ namespace MissionPlanner.GCSViews
             log.Info("Ctor Start");
 
             InitializeComponent();
+            ApplyProjectFlightDataScope();
 
             log.Info("Components Done");
 
@@ -689,70 +690,48 @@ namespace MissionPlanner.GCSViews
             }
         }
 
+        private void ApplyProjectFlightDataScope()
+        {
+            foreach (var tab in new[] { tabPagePreFlight, tabGauges, tabServo, tabTransponder, tabPayload })
+                tabControlactions.TabPages.Remove(tab);
+            // 检查表构造时启动了定时器，移除页签之外还要停止其组件。
+            checkListControl1.Dispose();
+            tabControlactions.ContextMenuStrip = null;
+
+            var actions = new Control[] { CMB_action, BUTactiondo, CMB_setwp, BUT_setwp,
+                CMB_modes, BUT_setmode, BUT_quickauto, BUT_ARM };
+            foreach (Control control in tableLayoutPanel1.Controls)
+                control.Visible = actions.Contains(control);
+            myButton1.Visible = false;
+            myButton2.Visible = false;
+            BUT_log2kml.Visible = false;
+            BUT_georefimage.Visible = false;
+            BUT_matlab.Visible = false;
+            but_dflogtokml.Visible = false;
+            BUT_loganalysis.Visible = false;
+
+            contextMenuStripHud.Items.Clear();
+            contextMenuStripHud.Items.AddRange(new ToolStripItem[] { userItemsToolStripMenuItem,
+                setBatteryCellCountToolStripMenuItem });
+            contextMenuStripQuickView.Items.Remove(undockToolStripMenuItem);
+            gMapControl1.ContextMenuStrip = null;
+        }
+
         private void updateDisplayTabControlActions()
         {
             TabListDisplay.Clear();
-
-            TabListDisplay.Add(tabQuick.Name, MainV2.DisplayConfiguration.displayQuickTab);
-
-            TabListDisplay.Add(tabPagePreFlight.Name, MainV2.DisplayConfiguration.displayPreFlightTab);
-
-            TabListDisplay.Add(tabActions.Name, MainV2.DisplayConfiguration.displayAdvActionsTab);
-
-            TabListDisplay.Add(tabActionsSimple.Name, MainV2.DisplayConfiguration.displaySimpleActionsTab);
-
-            TabListDisplay.Add(tabGauges.Name, MainV2.DisplayConfiguration.displayGaugesTab);
-
-            TabListDisplay.Add(tabStatus.Name, MainV2.DisplayConfiguration.displayStatusTab);
-
-            TabListDisplay.Add(tabServo.Name, MainV2.DisplayConfiguration.displayServoTab);
-
-            TabListDisplay.Add(tabScripts.Name, MainV2.DisplayConfiguration.displayScriptsTab);
-
-            TabListDisplay.Add(tabTLogs.Name, MainV2.DisplayConfiguration.displayTelemetryTab);
-
-            TabListDisplay.Add(tablogbrowse.Name, MainV2.DisplayConfiguration.displayDataflashTab);
-
-            TabListDisplay.Add(tabPagemessages.Name, MainV2.DisplayConfiguration.displayMessagesTab);
-
-            TabListDisplay.Add(tabTransponder.Name, MainV2.DisplayConfiguration.displayTransponderTab);
-
-            TabListDisplay.Add(tabAuxFunction.Name, MainV2.DisplayConfiguration.displayAuxFunctionTab);
-
-            TabListDisplay.Add(tabPayload.Name, MainV2.DisplayConfiguration.displayPayloadTab);
+            foreach (var tab in TabListOriginal)
+                TabListDisplay[tab.Name] = true;
         }
 
         private void loadTabControlActions()
         {
-            string tabs = Settings.Instance["tabcontrolactions"];
-
-            if (String.IsNullOrEmpty(tabs) || TabListOriginal == null || TabListOriginal.Count == 0)
-                return;
-
-            string[] tabarray = tabs.Split(';');
-
-            if (tabarray.Length == 0)
-                return;
-
+            // 项目清单统一生效，旧版显示配置和页签记忆不能恢复被移除的入口。
+            var selected = tabControlactions.SelectedTab;
             tabControlactions.TabPages.Clear();
-
-            foreach (var tabname in tabarray)
-            {
-                bool added = false;
-                foreach (TabPage tabPage in TabListOriginal)
-                {
-                    if (tabPage.Name == tabname && ((TabListDisplay.ContainsKey(tabname) && TabListDisplay[tabname] == true) || !TabListDisplay.ContainsKey(tabname)))
-                    {
-                        tabControlactions.TabPages.Add(tabPage);
-                        log.Debug("add tabControlactions " + tabPage.Name);
-                        added = true;
-                        break;
-                    }
-                }
-
-                if(!added)
-                    log.Debug("not added to tabControlactions " + tabname);
-            }
+            tabControlactions.TabPages.AddRange(TabListOriginal.ToArray());
+            if (selected != null && TabListOriginal.Contains(selected))
+                tabControlactions.SelectedTab = selected;
         }
 
         public void updateDisplayView()
@@ -852,85 +831,8 @@ namespace MissionPlanner.GCSViews
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            if (keyData == (Keys.Control | Keys.D1))
-            {
-                tabControlactions.SelectedIndex = 0;
-                return true;
-            }
-            else if (keyData == (Keys.Control | Keys.D2))
-            {
-                tabControlactions.SelectedIndex = 1;
-                return true;
-            }
-            else if (keyData == (Keys.Control | Keys.D3))
-            {
-                tabControlactions.SelectedIndex = 2;
-                return true;
-            }
-            else if (keyData == (Keys.Control | Keys.D4))
-            {
-                tabControlactions.SelectedIndex = 3;
-                return true;
-            }
-            else if (keyData == (Keys.Control | Keys.D5))
-            {
-                tabControlactions.SelectedIndex = 4;
-                return true;
-            }
-            else if (keyData == (Keys.Control | Keys.D6))
-            {
-                tabControlactions.SelectedIndex = 5;
-                return true;
-            }
-            else if (keyData == (Keys.Control | Keys.D7))
-            {
-                tabControlactions.SelectedIndex = 6;
-                return true;
-            }
-            else if (keyData == (Keys.Control | Keys.D8))
-            {
-                tabControlactions.SelectedIndex = 7;
-                return true;
-            }
-            else if (keyData == (Keys.Control | Keys.D9))
-            {
-                tabControlactions.SelectedIndex = 8;
-                return true;
-            }
-            else if (keyData == (Keys.Control | Keys.D0))
-            {
-                tabControlactions.SelectedIndex = 9;
-                return true;
-            }
-
-            if (keyData == (Keys.Space))
-            {
-                if (MainV2.comPort.logplaybackfile != null)
-                {
-                    BUT_playlog_Click(null, null);
-                    return true;
-                }
-            }
-            else if (keyData == (Keys.Subtract))
-            {
-                if (LogPlayBackSpeed > 1)
-                    LogPlayBackSpeed--;
-                else
-                    LogPlayBackSpeed /= 2;
-
-                updateLogPlayPosition();
-            }
-            else if (keyData == (Keys.Add))
-            {
-                if (LogPlayBackSpeed > 1)
-                    LogPlayBackSpeed++;
-                else
-                    LogPlayBackSpeed *= 2;
-
-                updateLogPlayPosition();
-            }
-
-            return false;
+            // 普通文本编辑键继续交给控件；业务快捷键由主窗口统一处理。
+            return base.ProcessCmdKey(ref msg, keyData);
         }
 
         void addHudUserItem(ref HUD.Custom cust, string name)
@@ -4247,11 +4149,8 @@ namespace MissionPlanner.GCSViews
                     Console.WriteLine("FD Main loop exception " + ex);
                 }
 
-                if (MainV2.comPort.MAV.cs.xpdr_status_pending || transponderUpdate.AddMilliseconds(5000) < DateTime.Now)
-                {
-                    BeginInvoke((Action) updateTransponder);
-                    transponderUpdate = DateTime.Now;
-                }
+                // 应答机页已移除，不再投递专用界面更新。
+
             }
 
             Console.WriteLine("FD Main loop exit");

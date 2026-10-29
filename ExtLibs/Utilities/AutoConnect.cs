@@ -59,7 +59,7 @@ namespace MissionPlanner.Utilities
 
         private static string SettingsName = "AutoConnect";
 
-        public static void Start()
+        public static void Start(bool includeVideo = true)
         {
             var config = Settings.Instance[SettingsName];
 
@@ -73,6 +73,9 @@ namespace MissionPlanner.Utilities
 
             foreach (var connectionInfo in connectionInfos)
             {
+                // 产品未启用视频时，不建立对应监听或自动视频连接。
+                if (!includeVideo && connectionInfo.Format == ConnectionFormat.Video)
+                    continue;
                 ProcessEntry(connectionInfo);
             }
         }

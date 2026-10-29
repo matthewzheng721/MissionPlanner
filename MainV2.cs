@@ -596,8 +596,8 @@ namespace MissionPlanner
 
         public void updateLayout(object sender, EventArgs e)
         {
-            MenuSimulation.Visible = DisplayConfiguration.displaySimulation;
-            MenuHelp.Visible = DisplayConfiguration.displayHelp;
+            MenuSimulation.Visible = false;
+            MenuHelp.Visible = false;
             MissionPlanner.Controls.BackstageView.BackstageView.Advanced = DisplayConfiguration.isAdvancedMode;
 
             // force autohide on
@@ -698,6 +698,7 @@ namespace MissionPlanner
             }
 
             InitializeComponent();
+            ConfigureProjectMenu();
 
             //Init Theme table and load BurntKermit as a default
             ThemeManager.thmColor = new ThemeColorTable(); //Init colortable
@@ -737,16 +738,9 @@ namespace MissionPlanner
             var t = Type.GetType("Mono.Runtime");
             MONO = (t != null);
 
-            try
-            {
-                if (speechEngine == null)
-                    speechEngine = new Speech();
-                MAVLinkInterface.Speech = speechEngine;
-                CurrentState.Speech = speechEngine;
-            }
-            catch
-            {
-            }
+            // 项目不初始化语音引擎。
+            MAVLinkInterface.Speech = null;
+            CurrentState.Speech = null;
 
             // proxy loader - dll load now instead of on config form load
             new Transition(new TransitionType_EaseInEaseOut(2000));
@@ -853,13 +847,13 @@ namespace MissionPlanner
                 FlightPlanner = new GCSViews.FlightPlanner();
                 //Configuration = new GCSViews.ConfigurationView.Setup();
                 log.Info("Create SIM");
-                Simulation = new GCSViews.SITL();
+                // 本项目不创建仿真页面；外部 SITL 仍可通过普通连接接入。
                 //Firmware = new GCSViews.Firmware();
                 //Terminal = new GCSViews.Terminal();
 
                 FlightData.Width = MyView.Width;
                 FlightPlanner.Width = MyView.Width;
-                Simulation.Width = MyView.Width;
+
             }
             catch (ArgumentException e)
             {
@@ -2136,7 +2130,7 @@ namespace MissionPlanner
             log.Info("closing sim");
             try
             {
-                Simulation.Dispose();
+                Simulation?.Dispose();
             }
             catch
             {
@@ -3162,8 +3156,8 @@ namespace MissionPlanner
             MyView.AddScreen(new MainSwitcher.Screen("FlightPlanner", FlightPlanner, true));
             MyView.AddScreen(new MainSwitcher.Screen("HWConfig", typeof(GCSViews.InitialSetup), false));
             MyView.AddScreen(new MainSwitcher.Screen("SWConfig", typeof(GCSViews.SoftwareConfig), false));
-            MyView.AddScreen(new MainSwitcher.Screen("Simulation", Simulation, true));
-            MyView.AddScreen(new MainSwitcher.Screen("Help", typeof(GCSViews.Help), false));
+
+
 
             try
             {
@@ -3176,7 +3170,7 @@ namespace MissionPlanner
                     Plugin.PluginLoader.DisabledPluginNames.Clear();
                     foreach (var s in Settings.Instance.GetList("DisabledPlugins"))
                         Plugin.PluginLoader.DisabledPluginNames.Add(s);
-                    Plugin.PluginLoader.LoadAll();
+                    // 不自动加载捆绑示例插件，避免重新注入清单外菜单或后台动作。
                     log.Info("Load Pluggins... Done");
                 }
             }
@@ -3205,33 +3199,7 @@ namespace MissionPlanner
 
             this.SuspendLayout();
 
-            // setup http server
-            try
-            {
-                log.Info("start http");
-                httpthread = new Thread(new httpserver().listernforclients)
-                {
-                    Name = "motion jpg stream-network kml",
-                    IsBackground = true
-                };
-                httpthread.Start();
-            }
-            catch (Exception ex)
-            {
-                log.Error("Error starting TCP listener thread: ", ex);
-                CustomMessageBox.Show(ex.ToString());
-            }
-
-            log.Info("start joystick");
-            try
-            {
-                // setup joystick packet sender
-                joysticksend();
-            }
-            catch (NotSupportedException ex)
-            {
-                log.Error(ex);
-            }
+            // 视频输出及摇杆均未保留，不启动其专用服务线程。
 
             log.Info("start serialreader");
             try
@@ -3337,43 +3305,7 @@ namespace MissionPlanner
                     log.Error(ex);
                 }
             };
-            AutoConnect.NewVideoStream += (sender, gststring) =>
-            {
-                MainV2.instance.BeginInvoke((Action) delegate
-                {
-                    try
-                    {
-                        log.Info("AutoConnect.NewVideoStream " + gststring);
-                        GStreamer.GstLaunch = GStreamer.LookForGstreamer();
-
-                        if (!GStreamer.GstLaunchExists)
-                        {
-                            if (CustomMessageBox.Show(
-                                    "A video stream has been detected, but gstreamer has not been configured/installed.\nDo you want to install/config it now?",
-                                    "GStreamer", System.Windows.Forms.MessageBoxButtons.YesNo) ==
-                                (int) System.Windows.Forms.DialogResult.Yes)
-                            {
-                                GStreamerUI.DownloadGStreamer();
-                                if (!GStreamer.GstLaunchExists)
-                                {
-                                    return;
-                                }
-                            }
-                            else
-                            {
-                                return;
-                            }
-                        }
-
-                        GCSViews.FlightData.hudGStreamer.Start(gststring);
-                    }
-                    catch (Exception ex)
-                    {
-                        log.Error(ex);
-                    }
-                });
-            };
-            AutoConnect.Start();
+            AutoConnect.Start(false);
 
             BinaryLog.onFlightMode += (firmware, modeno) =>
             {
@@ -3630,24 +3562,7 @@ namespace MissionPlanner
                 System.Configuration.ConfigurationManager.AppSettings["BetaUpdateLocationVersion"] = "";
             }
 
-            try
-            {
-                // single update check per day - in a seperate thread
-                if (Settings.Instance["update_check"] != DateTime.Now.ToShortDateString())
-                {
-                    System.Threading.ThreadPool.QueueUserWorkItem(checkupdate);
-                    Settings.Instance["update_check"] = DateTime.Now.ToShortDateString();
-                }
-                else if (Settings.Instance.GetBoolean("beta_updates") == true)
-                {
-                    MissionPlanner.Utilities.Update.dobeta = true;
-                    System.Threading.ThreadPool.QueueUserWorkItem(checkupdate);
-                }
-            }
-            catch (Exception ex)
-            {
-                log.Error("Update check failed", ex);
-            }
+            // 开发版不检查或安装官方更新，防止替换项目功能裁剪。
 
             // play a tlog that was passed to the program/ load a bin log passed
             if (Program.args.Length > 0)
@@ -3745,79 +3660,7 @@ namespace MissionPlanner
                     }
                 }
 
-                if (cmds.ContainsKey("cam"))
-                {
-                    try
-                    {
-                        MainV2.cam = new WebCamService.Capture(int.Parse(cmds["cam"]), null);
-
-                        MainV2.cam.Start();
-                    }
-                    catch (Exception ex)
-                    {
-                        CustomMessageBox.Show(ex.ToString());
-                    }
-                }
-
-                if (cmds.ContainsKey("gstream"))
-                {
-                    GStreamer.GstLaunch = GStreamer.LookForGstreamer();
-
-                    if (!GStreamer.GstLaunchExists)
-                    {
-                        if (CustomMessageBox.Show(
-                                "A video stream has been detected, but gstreamer has not been configured/installed.\nDo you want to install/config it now?",
-                                "GStreamer", System.Windows.Forms.MessageBoxButtons.YesNo) ==
-                            (int) System.Windows.Forms.DialogResult.Yes)
-                        {
-                            GStreamerUI.DownloadGStreamer();
-                        }
-                    }
-
-                    try
-                    {
-                        new Thread(delegate()
-                            {
-                                // 36 retrys
-                                for (int i = 0; i < 36; i++)
-                                {
-                                    try
-                                    {
-                                        var st = GCSViews.FlightData.hudGStreamer.Start(cmds["gstream"]);
-                                        if (st == null)
-                                        {
-                                            // prevent spam
-                                            Thread.Sleep(5000);
-                                        }
-                                        else
-                                        {
-                                            while (st.IsAlive)
-                                            {
-                                                Thread.Sleep(1000);
-                                            }
-                                        }
-                                    }
-                                    catch (BadImageFormatException ex)
-                                    {
-                                        // not running on x64
-                                        log.Error(ex);
-                                        return;
-                                    }
-                                    catch (DllNotFoundException ex)
-                                    {
-                                        // missing or failed download
-                                        log.Error(ex);
-                                        return;
-                                    }
-                                }
-                            })
-                            {IsBackground = true, Name = "Gstreamer cli"}.Start();
-                    }
-                    catch (Exception ex)
-                    {
-                        log.Error(ex);
-                    }
-                }
+                // 项目不接受视频启动参数。
 
                 if (cmds.ContainsKey("port") && cmds.ContainsKey("baud"))
                 {
@@ -4040,147 +3883,73 @@ namespace MissionPlanner
         /// <param name="msg"></param>
         /// <param name="keyData"></param>
         /// <returns></returns>
+        private bool refreshingParameters;
+        private readonly ToolStripLabel parameterRefreshStatus = new ToolStripLabel();
+
+        private void ConfigureProjectMenu()
+        {
+            MainMenu.Items.Remove(MenuSimulation);
+            MainMenu.Items.Remove(MenuHelp);
+            MainMenu.Items.Remove(MenuArduPilot);
+            var tools = new ToolStripDropDownButton("工具") { Name = "ProjectTools" };
+            tools.DropDownItems.Add("MAVLink Inspector", null, (sender, args) =>
+            {
+                var inspector = new MAVLinkInspector(comPort);
+                ThemeManager.ApplyThemeTo(inspector);
+                inspector.Show(this);
+            });
+            tools.DropDownItems.Add("Message Interval", null,
+                (sender, args) => temp.ShowMessageInterval(this));
+            MainMenu.Items.Insert(4, tools);
+            parameterRefreshStatus.Name = "ParameterRefreshStatus";
+            MainMenu.Items.Add(parameterRefreshStatus);
+        }
+
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            if (ConfigTerminal.SSHTerminal)
-            {
-                return false;
-            }
-
-            if (keyData == Keys.F12)
-            {
-                MenuConnect_Click(null, null);
-                return true;
-            }
-
-            if (keyData == Keys.F2)
-            {
-                MenuFlightData_Click(null, null);
-                return true;
-            }
-
-            if (keyData == Keys.F3)
-            {
-                MenuFlightPlanner_Click(null, null);
-                return true;
-            }
-
-            if (keyData == Keys.F4)
-            {
-                MenuTuning_Click(null, null);
-                return true;
-            }
-
             if (keyData == Keys.F5)
             {
-                comPort.getParamList();
-                MyView.ShowScreen(MyView.current.Name);
+                RefreshProjectParameters();
                 return true;
             }
-
-            if (keyData == (Keys.Control | Keys.F)) // temp
-            {
-                Form frm = new temp();
-                ThemeManager.ApplyThemeTo(frm);
-                frm.Show();
-                return true;
-            }
-
-            /*if (keyData == (Keys.Control | Keys.S)) // screenshot
-            {
-                ScreenShot();
-                return true;
-            }*/
-            if (keyData == (Keys.Control | Keys.P))
-            {
-                new PluginUI().Show();
-                return true;
-            }
-
-            if (keyData == (Keys.Control | Keys.G)) // nmea out
-            {
-                Form frm = new SerialOutputNMEA();
-                ThemeManager.ApplyThemeTo(frm);
-                frm.Show();
-                return true;
-            }
-
-            if (keyData == (Keys.Control | Keys.X))
-            {
-                new GMAPCache().ShowUserControl();
-                return true;
-            }
-
-            if (keyData == (Keys.Control | Keys.L)) // limits
-            {
-                //new DigitalSkyUI().ShowUserControl();
-
-                new SpectrogramUI().Show();
-
-                return true;
-            }
-
-            if (keyData == (Keys.Control | Keys.W)) // test ac config
-            {
-                new PropagationSettings().Show();
-
-                return true;
-            }
-
-            if (keyData == (Keys.Control | Keys.Z))
-            {
-                //ScanHW.Scan(comPort);
-                new Camera().test(MainV2.comPort);
-                return true;
-            }
-
-            if (keyData == (Keys.Control | Keys.T)) // for override connect
-            {
-                try
-                {
-                    MainV2.comPort.Open(false);
-                }
-                catch (Exception ex)
-                {
-                    CustomMessageBox.Show(ex.ToString());
-                }
-
-                return true;
-            }
-
-            if (keyData == (Keys.Control | Keys.Y)) // for ryan beall and ollyw42
-            {
-                // write
-                try
-                {
-                    MainV2.comPort.doCommand((byte) MainV2.comPort.sysidcurrent, (byte) MainV2.comPort.compidcurrent,
-                        MAVLink.MAV_CMD.PREFLIGHT_STORAGE, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-                }
-                catch
-                {
-                    CustomMessageBox.Show("Invalid command");
-                    return true;
-                }
-
-                //read
-                ///////MainV2.comPort.doCommand(MAVLink09.MAV_CMD.PREFLIGHT_STORAGE, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-                CustomMessageBox.Show("Done MAV_ACTION_STORAGE_WRITE");
-                return true;
-            }
-
-            if (keyData == (Keys.Control | Keys.J))
-            {
-                new DevopsUI().ShowUserControl();
-
-                return true;
-            }
-
-            if (ProcessCmdKeyCallback != null)
-            {
-                return ProcessCmdKeyCallback(ref msg, keyData);
-            }
-
+            // 保留文本复制、粘贴等控件默认行为，不再注册其他业务快捷键。
             return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        private async void RefreshProjectParameters()
+        {
+            if (refreshingParameters)
+                return;
+            var connection = comPort;
+            if (!connection.BaseStream.IsOpen)
+            {
+                parameterRefreshStatus.Text = "参数刷新：未连接";
+                return;
+            }
+            refreshingParameters = true;
+            parameterRefreshStatus.Text = "正在读取全部参数…";
+            try
+            {
+                // 复用无界面读取，避免原版模态进度窗口阻止飞行操作。
+                var system = (byte)connection.sysidcurrent;
+                var component = (byte)connection.compidcurrent;
+                await Task.Run(() => connection.getParamListAsync(system, component, true));
+                if (!IsDisposed)
+                {
+                    parameterRefreshStatus.Text = "参数读取完成";
+                    MyView.ShowScreen(MyView.current.Name);
+                }
+            }
+            catch (Exception ex)
+            {
+                log.Error("参数刷新失败", ex);
+                if (!IsDisposed)
+                    parameterRefreshStatus.Text = "参数读取失败：" + ex.Message;
+            }
+            finally
+            {
+                refreshingParameters = false;
+            }
         }
 
         public delegate bool ProcessCmdKeyHandler(ref Message msg, Keys keyData);

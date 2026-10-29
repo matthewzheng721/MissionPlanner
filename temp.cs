@@ -1023,7 +1023,12 @@ namespace MissionPlanner
 
         private void but_messageinterval_Click(object sender, EventArgs e)
         {
-            var form = new Form();
+            ShowMessageInterval(this);
+        }
+
+        public static void ShowMessageInterval(IWin32Window owner)
+        {
+            var form = new Form { Text = "Message Interval" };
             FlowLayoutPanel flp = new FlowLayoutPanel();
             flp.Dock = DockStyle.Fill;
             flp.AutoSize = true;
@@ -1092,7 +1097,8 @@ namespace MissionPlanner
 
             flp.Controls.Add(but2);
 
-            form.Show(this);
+            ThemeManager.ApplyThemeTo(form);
+            form.Show(owner);
         }
 
         private void BUT_xplane_Click(object sender, EventArgs e)

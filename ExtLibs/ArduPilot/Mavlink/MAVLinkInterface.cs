@@ -1787,6 +1787,7 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
             frmProgressReporter.RunBackgroundOperationAsync();
 
             frmProgressReporter.Dispose();
+            frmProgressReporter = null; // 后续无界面参数读取不再访问已释放的进度窗口。
 
             _ParamListChanged?.Invoke(this, null);
         }
@@ -1942,9 +1943,10 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
         /// Get param list from apm
         /// </summary>
         /// <returns></returns>
-        public async Task<MAVLinkParamList> getParamListAsync(byte sysid, byte compid)
+        public async Task<MAVLinkParamList> getParamListAsync(byte sysid, byte compid, bool refreshInPlace = false)
         {
-            List<int> indexsreceived = new List<int>();
+            // 非模态刷新由接收线程登记索引、工作线程检查缺失项。
+            var indexsreceived = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
 
             // create new list so if canceled we use the old list
             MAVLinkParamList newparamlist = new MAVLinkParamList();
@@ -2007,7 +2009,7 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
 
             int seenvalid = 0;
 
-            var sub1 = SubscribeToPacketType(MAVLINK_MSG_ID.PARAM_VALUE, buffer =>
+            Func<MAVLinkMessage, bool> receiveParameter = buffer =>
             {
                 if (buffer.msgid == (byte) MAVLINK_MSG_ID.PARAM_VALUE && buffer.sysid == req.target_system &&
                     buffer.compid == req.target_component)
@@ -2034,7 +2036,7 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
                     }
 
                     // check if we already have it
-                    if (indexsreceived.Contains(par.param_index))
+                    if (indexsreceived.ContainsKey(par.param_index))
                     {
                         log.Info("Already got " + (par.param_index) + " '" + paramID + "' " +
                                  (indexsreceived.Count * 100) / param_total);
@@ -2071,7 +2073,7 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
 
                     // exclude index of 65535
                     if (par.param_index != 65535)
-                        indexsreceived.Add(par.param_index);
+                        indexsreceived.TryAdd(par.param_index, 0);
 
                     lock(MAVlist[sysid, compid].param_types)
                         MAVlist[sysid, compid].param_types[paramID] = (MAV_PARAM_TYPE) par.param_type;
@@ -2088,159 +2090,192 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
                 }
 
                 return true;
-            }, (byte)sysid, (byte)compid);
-
-
-            generatePacket((byte)MAVLINK_MSG_ID.PARAM_REQUEST_LIST, req);
-
-            short tenbytenindex = 0;
-
-            do
+            };
+            Exception refreshError = null;
+            EventHandler<MAVLinkMessage> refreshedParameter = (sender, packet) =>
             {
-                if (frmProgressReporter != null && frmProgressReporter.doWorkArgs.CancelRequested)
+                try
                 {
-                    frmProgressReporter.doWorkArgs.CancelAcknowledged = true;
-
-                    UnSubscribeToPacketType(sub1);
-                    UnSubscribeToPacketType(sub2);
-                    frmProgressReporter.doWorkArgs.ErrorMessage = "User Canceled";
-                    return MAVlist[sysid, compid].param;
+                    receiveParameter(packet);
                 }
-
-                // 4 seconds between valid packets or got to last param and have some missing
-                if ((missing_params || !(start.AddMilliseconds(4000) > DateTime.Now)) && !logreadmode)
+                catch (Exception ex)
                 {
-                    // if we have less than 75% of the total use full list pull
-                    if (!onebyone && (retry < 2) && ((param_total <= 1) || (indexsreceived.Count < ((param_total / 4) * 3))))
+                    // 将刷新错误交回工作任务，不中断共享遥测接收回调。
+                    Interlocked.CompareExchange(ref refreshError, ex, null);
+                }
+            };
+            // F5 与写参并行时使用事件委托解除，避免旧订阅哈希标识误移除另一个回调。
+            int sub1 = 0;
+            if (refreshInPlace)
+                OnPacketReceived += refreshedParameter;
+            else
+                sub1 = SubscribeToPacketType(MAVLINK_MSG_ID.PARAM_VALUE, receiveParameter, sysid, compid);
+
+
+            try
+            {
+                var refreshStarted = System.Diagnostics.Stopwatch.StartNew();
+                generatePacket((byte)MAVLINK_MSG_ID.PARAM_REQUEST_LIST, req);
+
+                short tenbytenindex = 0;
+
+                do
+                {
+                    if (refreshError != null)
+                        throw new InvalidOperationException("参数刷新处理失败", refreshError);
+                    // 无模态操作必须有结束条件，静默设备不能永久占用刷新状态。
+                    if (refreshInPlace && refreshStarted.Elapsed.TotalSeconds > 60)
+                        throw new TimeoutException("读取全部参数超时，请检查连接后重试。");
+                    if (frmProgressReporter != null && frmProgressReporter.doWorkArgs.CancelRequested)
                     {
-                        if (param_total > 1)
-                        {
-                            // only increment retry counter if we have a valid total
-                            // otherwise keep requesting full list
-                            retry++;
-                        }
-                        log.InfoFormat("Get Param whole list retry {0} got {1} 75%={2} count {3}", retry,
-                            indexsreceived.Count, ((param_total / 4) * 3), param_total);
-                        generatePacket((byte) MAVLINK_MSG_ID.PARAM_REQUEST_LIST, req);
-                        start = DateTime.Now;
-                        missing_params = false;
-                        continue;
+                        frmProgressReporter.doWorkArgs.CancelAcknowledged = true;
+                        frmProgressReporter.doWorkArgs.ErrorMessage = "User Canceled";
+                        return MAVlist[sysid, compid].param;
                     }
 
-                    onebyone = true;
-
-                    if (lastonebyone.AddMilliseconds(1000) < DateTime.Now)
+                    // 4 seconds between valid packets or got to last param and have some missing
+                    if ((missing_params || !(start.AddMilliseconds(4000) > DateTime.Now)) && !logreadmode)
                     {
-                        int queued = 0;
-                        short startindex = 0;
-                        var backupseenvalid = seenvalid;
-                        if (param_total > 1)
-                            startindex = (short) (tenbytenindex % (param_total - 1));
-                        
-                        seenvalid = 0;
-
-                        // seeing more than what we requested... skip this round - maybe full param list is still inflight
-                        if(backupseenvalid > 10)
-                            continue;
-
-                        log.Info("Get param 10 by 10 - got " + indexsreceived.Count + " of " + param_total +
-                                 " request from startindex " + startindex + " seen since last requests " + backupseenvalid);
-
-                        // try getting individual params
-                        bool found_missing_param = false;
-                        for (short i = startindex; i <= (param_total - 1); i++)
+                        // if we have less than 75% of the total use full list pull
+                        if (!onebyone && (retry < 2) && ((param_total <= 1) || (indexsreceived.Count < ((param_total / 4) * 3))))
                         {
-                            if (!indexsreceived.Contains(i))
+                            if (param_total > 1)
                             {
-                                found_missing_param = true;
+                                // only increment retry counter if we have a valid total
+                                // otherwise keep requesting full list
+                                retry++;
+                            }
+                            log.InfoFormat("Get Param whole list retry {0} got {1} 75%={2} count {3}", retry,
+                                indexsreceived.Count, ((param_total / 4) * 3), param_total);
+                            generatePacket((byte) MAVLINK_MSG_ID.PARAM_REQUEST_LIST, req);
+                            start = DateTime.Now;
+                            missing_params = false;
+                            continue;
+                        }
 
-                                if (frmProgressReporter != null && frmProgressReporter.doWorkArgs.CancelRequested)
+                        onebyone = true;
+
+                        if (lastonebyone.AddMilliseconds(1000) < DateTime.Now)
+                        {
+                            int queued = 0;
+                            short startindex = 0;
+                            var backupseenvalid = seenvalid;
+                            if (param_total > 1)
+                                startindex = (short) (tenbytenindex % (param_total - 1));
+                        
+                            seenvalid = 0;
+
+                            // seeing more than what we requested... skip this round - maybe full param list is still inflight
+                            if(backupseenvalid > 10)
+                                continue;
+
+                            log.Info("Get param 10 by 10 - got " + indexsreceived.Count + " of " + param_total +
+                                     " request from startindex " + startindex + " seen since last requests " + backupseenvalid);
+
+                            // try getting individual params
+                            bool found_missing_param = false;
+                            for (short i = startindex; i <= (param_total - 1); i++)
+                            {
+                                if (!indexsreceived.ContainsKey(i))
                                 {
-                                    frmProgressReporter.doWorkArgs.CancelAcknowledged = true;
-                                    UnSubscribeToPacketType(sub1);
-                                    UnSubscribeToPacketType(sub2);
-                                    frmProgressReporter.doWorkArgs.ErrorMessage = "User Canceled";
-                                    return MAVlist[sysid, compid].param;
-                                }
+                                    found_missing_param = true;
 
-                                // prevent dropping out of this get params loop
-                                try
-                                {
-                                    queued++;
-                                    tenbytenindex = (short)(i + 1);
-
-                                    mavlink_param_request_read_t req2 = new mavlink_param_request_read_t
+                                    if (frmProgressReporter != null && frmProgressReporter.doWorkArgs.CancelRequested)
                                     {
-                                        target_system = sysid,
-                                        target_component = compid,
-                                        param_index = i,
-                                        param_id = new byte[] {0}
-                                    };
+                                        frmProgressReporter.doWorkArgs.CancelAcknowledged = true;
+                                        frmProgressReporter.doWorkArgs.ErrorMessage = "User Canceled";
+                                        return MAVlist[sysid, compid].param;
+                                    }
 
-                                    Array.Resize(ref req2.param_id, 16);
-
-                                    generatePacket((byte) MAVLINK_MSG_ID.PARAM_REQUEST_READ, req2);
-
-                                    if (queued >= 10)
+                                    // prevent dropping out of this get params loop
+                                    try
                                     {
-                                        break;
+                                        queued++;
+                                        tenbytenindex = (short)(i + 1);
+
+                                        mavlink_param_request_read_t req2 = new mavlink_param_request_read_t
+                                        {
+                                            target_system = sysid,
+                                            target_component = compid,
+                                            param_index = i,
+                                            param_id = new byte[] {0}
+                                        };
+
+                                        Array.Resize(ref req2.param_id, 16);
+
+                                        generatePacket((byte) MAVLINK_MSG_ID.PARAM_REQUEST_READ, req2);
+
+                                        if (queued >= 10)
+                                        {
+                                            break;
+                                        }
+                                    }
+                                    catch (Exception excp)
+                                    {
+                                        log.Info("GetParam Failed index: " + i + " " + excp);
+                                        throw excp;
                                     }
                                 }
-                                catch (Exception excp)
-                                {
-                                    log.Info("GetParam Failed index: " + i + " " + excp);
-                                    UnSubscribeToPacketType(sub1);
-                                    UnSubscribeToPacketType(sub2);
-                                    throw excp;
-                                }
                             }
-                        }
-                        if (!found_missing_param)
-                        {
-                            // no missing param after start index, start from the begining
-                            tenbytenindex = 0;
-                        }
+                            if (!found_missing_param)
+                            {
+                                // no missing param after start index, start from the begining
+                                tenbytenindex = 0;
+                            }
 
-                        lastonebyone = DateTime.Now;
+                            lastonebyone = DateTime.Now;
+                        }
                     }
-                }
 
-                await readPacketAsync();
+                    // 非模态刷新使用已有接收循环，避免与飞行指令抢占读取锁。
+                    if (refreshInPlace)
+                        await Task.Delay(10).ConfigureAwait(false);
+                    else
+                        await readPacketAsync();
 
-                if (logreadmode && logplaybackfile.BaseStream.Position >= logplaybackfile.BaseStream.Length)
+                    if (logreadmode && logplaybackfile.BaseStream.Position >= logplaybackfile.BaseStream.Length)
+                    {
+                        break;
+                    }
+
+                    if (!logreadmode && !BaseStream.IsOpen)
+                    {
+                        var exp = new Exception("Not Connected");
+                        if (frmProgressReporter != null)
+                            frmProgressReporter.doWorkArgs.ErrorMessage = exp.Message;
+                        throw exp;
+                    }
+                } while (indexsreceived.Count < param_total);
+
+                if (indexsreceived.Count != param_total)
                 {
-                    break;
-                }
-
-                if (!logreadmode && !BaseStream.IsOpen)
-                {
-                    var exp = new Exception("Not Connected");
-                    frmProgressReporter.doWorkArgs.ErrorMessage = exp.Message;
-                    UnSubscribeToPacketType(sub1);
-                    UnSubscribeToPacketType(sub2);
+                    var exp = new Exception("Missing Params " + indexsreceived.Count + " vs " + param_total);
+                    if (frmProgressReporter != null)
+                        frmProgressReporter.doWorkArgs.ErrorMessage = exp.Message;
                     throw exp;
                 }
-            } while (indexsreceived.Count < param_total);
 
-            if (indexsreceived.Count != param_total)
-            {
-                var exp = new Exception("Missing Params " + indexsreceived.Count + " vs " + param_total);
-                frmProgressReporter.doWorkArgs.ErrorMessage = exp.Message;
-                UnSubscribeToPacketType(sub1);
-                UnSubscribeToPacketType(sub2);
-                throw exp;
+                log.InfoFormat("list count {0}, rcvd total {1} indexseen count {2}", newparamlist.Count, param_total,
+                    indexsreceived.Count);
+
+                // 接收循环已逐条更新参数；非模态刷新不能用较早的快照覆盖期间写入的新值。
+                if (!refreshInPlace)
+                {
+                    MAVlist[sysid, compid].param.Clear();
+                    MAVlist[sysid, compid].param.AddRange(newparamlist);
+                }
+                MAVlist[sysid, compid].param.TotalReported = param_total;
+                return MAVlist[sysid, compid].param;
             }
-
-            UnSubscribeToPacketType(sub1);
-            UnSubscribeToPacketType(sub2);
-
-            log.InfoFormat("list count {0}, rcvd total {1} indexseen count {2}", newparamlist.Count, param_total,
-                indexsreceived.Count);
-
-            MAVlist[sysid, compid].param.Clear();
-            MAVlist[sysid, compid].param.TotalReported = param_total;
-            MAVlist[sysid, compid].param.AddRange(newparamlist);
-            return MAVlist[sysid, compid].param;
+            finally
+            {
+                // 断开、超时和发送失败均移除本次订阅，允许重新连接后再刷新。
+                if (refreshInPlace)
+                    OnPacketReceived -= refreshedParameter;
+                else
+                    UnSubscribeToPacketType(sub1);
+                UnSubscribeToPacketType(sub2);
+            }
         }
 
         private int _parampoll = 0;
