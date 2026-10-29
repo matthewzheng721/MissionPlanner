@@ -19,6 +19,25 @@ namespace MissionPlanner.Utilities
 
         public static string AppConfigName { get; set; } = "Mission Planner";
 
+        public static string RuntimeDataDirectory { get; private set; }
+
+        // 仅在启动时、首次读取 Settings.Instance 之前调用；未指定时保留原版路径。
+        public static void SetRuntimeDataDirectory(string directory)
+        {
+            if (directory == null)
+            {
+                RuntimeDataDirectory = null;
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(directory) || !Path.IsPathRooted(directory))
+                throw new ArgumentException("独立数据目录必须是绝对路径。", nameof(directory));
+            var fullPath = Path.GetFullPath(directory);
+            // Windows 的 C:目录和 \目录仍依赖当前盘或当前目录，不视为绝对路径。
+            if (!string.Equals(Path.GetPathRoot(directory), Path.GetPathRoot(fullPath), StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("独立数据目录必须是绝对路径。", nameof(directory));
+            RuntimeDataDirectory = fullPath;
+        }
+
         public static Settings Instance
         {
             get
@@ -145,7 +164,7 @@ namespace MissionPlanner.Utilities
 
         public static string GetDefaultLogDir()
         {
-            string directory = GetUserDataDirectory() + @"logs";
+            string directory = RuntimeDataDirectory == null ? GetUserDataDirectory() + @"logs" : Path.Combine(RuntimeDataDirectory, "logs");
             if (!Directory.Exists(directory))
             {
                 try
@@ -324,6 +343,8 @@ namespace MissionPlanner.Utilities
         /// <returns></returns>
         public static string GetDataDirectory()
         {
+            if (RuntimeDataDirectory != null)
+                return Path.Combine(RuntimeDataDirectory, "data") + Path.DirectorySeparatorChar;
             if (isMono())
             {
                 return GetUserDataDirectory();
@@ -343,6 +364,8 @@ namespace MissionPlanner.Utilities
         /// <returns></returns>
         public static string GetUserDataDirectory()
         {
+            if (RuntimeDataDirectory != null)
+                return Path.Combine(RuntimeDataDirectory, "config") + Path.DirectorySeparatorChar;
             if (CustomUserDataDirectory != "")
                 return CustomUserDataDirectory + Path.DirectorySeparatorChar + AppConfigName +
                        Path.DirectorySeparatorChar;
@@ -369,6 +392,12 @@ namespace MissionPlanner.Utilities
         /// <returns></returns>
         static string GetConfigFullPath()
         {
+            if (RuntimeDataDirectory != null)
+            {
+                // 独立模式不读取或搬迁程序目录和原版用户目录中的配置。
+                Directory.CreateDirectory(GetUserDataDirectory());
+                return Path.Combine(GetUserDataDirectory(), Path.GetFileName(FileName));
+            }
             // old path details
             string directory = GetRunningDirectory();
             if (!Directory.Exists(directory))
@@ -417,7 +446,7 @@ namespace MissionPlanner.Utilities
         static string GetConfigDefaultsFullPath()
         {
             // get default path details
-            var newdir = GetRunningDirectory();
+            var newdir = RuntimeDataDirectory == null ? GetRunningDirectory() : GetUserDataDirectory();
 
             var newpath = Path.Combine(newdir, "custom.config.xml");
 

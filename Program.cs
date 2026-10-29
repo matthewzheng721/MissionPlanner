@@ -125,6 +125,26 @@ namespace MissionPlanner
         public static void Start(string[] args)
         {
             Program.args = args;
+            // 必须先确定目录，再创建日志、读取设置或初始化地图缓存。
+            int dataDirectoryIndex = Array.FindIndex(args, a => a == "-datadir");
+            if (dataDirectoryIndex >= 0)
+            {
+                try
+                {
+                    if (dataDirectoryIndex + 1 >= args.Length || args.Contains("-config"))
+                        throw new ArgumentException("请使用 -datadir 绝对路径，不能同时指定 -config。");
+                    Settings.SetRuntimeDataDirectory(args[dataDirectoryIndex + 1]);
+                    Directory.CreateDirectory(Settings.GetDataDirectory());
+                    Directory.CreateDirectory(Settings.GetUserDataDirectory());
+                    GMap.NET.Internals.CacheLocator.Location = Path.Combine(Settings.GetDataDirectory(), "GMapCache");
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.Message, "独立运行目录设置失败");
+                    Environment.ExitCode = 1;
+                    return;
+                }
+            }
             Console.WriteLine(
                 "If your error is about Microsoft.DirectX.DirectInput, please install the latest directx redist from here http://www.microsoft.com/en-us/download/details.aspx?id=35 \n\n");
             Console.WriteLine("Debug under mono    MONO_LOG_LEVEL=debug mono MissionPlanner.exe");
@@ -160,7 +180,20 @@ namespace MissionPlanner
             Thread = Thread.CurrentThread;
 
             System.Windows.Forms.Application.EnableVisualStyles();
-            XmlConfigurator.Configure(LogManager.GetRepository(Assembly.GetCallingAssembly()));
+            if (Settings.RuntimeDataDirectory == null)
+            {
+                XmlConfigurator.Configure(LogManager.GetRepository(Assembly.GetCallingAssembly()));
+            }
+            else
+            {
+                // 在 appender 首次打开文件前替换路径，避免触碰原版日志及轮转文件。
+                var config = new System.Xml.XmlDocument();
+                config.Load(AppDomain.CurrentDomain.SetupInformation.ConfigurationFile);
+                var logging = (System.Xml.XmlElement)config.SelectSingleNode("/configuration/log4net");
+                foreach (System.Xml.XmlElement file in logging.SelectNodes("appender/file"))
+                    file.SetAttribute("value", Path.Combine(Settings.GetDataDirectory(), "MissionPlanner.log"));
+                XmlConfigurator.Configure(LogManager.GetRepository(Assembly.GetCallingAssembly()), logging);
+            }
             if (Environment.OSVersion.Platform == PlatformID.Unix)
             {
                 var repository = LogManager.GetRepository() as Hierarchy;
