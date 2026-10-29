@@ -220,8 +220,8 @@ namespace MissionPlanner.Log
             GPoint rightButtomPx = prj.FromLatLngToPixel(area.Bottom, area.Right, zoom);
             GPoint pxDelta = new GPoint(rightButtomPx.X - topLeftPx.X, rightButtomPx.Y - topLeftPx.Y);
 
-            // zoom based on pixel density
-            while (pxDelta.X > 2000)
+            // 同时限制宽高，避免南北跨度大的日志生成超高位图。
+            while (zoom > 0 && (pxDelta.X > 2000 || pxDelta.Y > 2000))
             {
                 zoom--;
 
