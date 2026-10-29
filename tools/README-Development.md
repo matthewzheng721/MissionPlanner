@@ -51,3 +51,8 @@ $script = (Resolve-Path '.\tools\Test-FlightDataScope.py').Path
 检查实际菜单和底图选项、180 条含不同高度参考系的航点编辑、JSON 保存加载及 SITL 上传下载逐项比对；传输期间执行飞行数据模式按钮与参数 API 写入，记录耗时和独立 UI 定时采样；调用测距和区域预下载入口。文件往返复用按钮的序列化/导入路径，不自动操作系统文件选择窗口。参数 API 测试不代表全部参数表的点击流程。
 
 结果为 `result.txt` 的 PASS/FAIL 和 `status.txt` 的 0/1；`telemetry.csv` 记录脚本采样，`continuous.csv` 的 UI 定时采样覆盖同步参数写入区间（最后一列为 UI 定时器实际间隔，不是请求响应延迟）。脚本不退出应用，结束后关闭专用测试实例。Google 在线请求失败时会记录预下载不完整，不能据此声称地图下载成功；本地受控缓存测试另由 `PlannerPrefetchTests` 验证内存命中后落盘以及 CacheOnly 读取。TCP SITL 的时间结果不能替代低速数传测试。
+## 卫星影像验证
+
+`Test-SatelliteMaps.py` 由 MP 的 `-script` 执行，不连接飞控。可设置 `MP_MAP_OUTPUT` 保存结果，`MP_MAP_LAT`、`MP_MAP_LNG`、`MP_MAP_ZOOM` 指定在线对照瓦片的位置与层级（区域预下载样例固定在 Canberra）；先从 Google 选项启动，可测量首次切换必应的耗时。脚本检查两个选项、飞行数据同步，直接请求在线瓦片，验证必应区域预下载、实际菜单及关闭内存缓存后的磁盘读取，并保存必应选择。重启时设置 `MP_MAP_EXPECT_BING=1` 再运行，可断言启动记忆和两页同步。
+
+输出 `result.txt`、`status.txt`（0 为选项/必应/缓存检查通过，1 为未完成或失败）及实际在线图片。Google 在线结果单独记录，Google 请求被拒绝时不会被标为在线成功，也不会自动替用户切换底图；脚本主动切换是测试步骤。测试结束保留必应选项，退出专用实例即可。`PlannerPrefetchTests` 对两种影像分别验证缓存落盘，并断言同一坐标不会读取另一种影像的缓存。

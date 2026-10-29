@@ -61,7 +61,7 @@ def structure():
     assert names==['deleteWPToolStripMenuItem','insertWpToolStripMenuItem','clearMissionToolStripMenuItem','setHomeHereToolStripMenuItem','mapToolToolStripMenuItem','fileLoadSaveToolStripMenuItem']
     assert [m.Name for m in field(fp,'mapToolToolStripMenuItem').DropDownItems]==['ContextMeasure','prefetchToolStripMenuItem']
     assert [m.Name for m in field(fp,'fileLoadSaveToolStripMenuItem').DropDownItems]==['loadWPFileToolStripMenuItem','saveWPFileToolStripMenuItem']
-    assert field(fp,'comboBoxMapType').Items.Count==1
+    assert field(fp,'comboBoxMapType').Items.Count==2
     assert field(fp,'cmb_missiontype').Items.Count==1
     log('map='+field(fp,'MainMap').MapProvider.Name)
     log('commands='+str(field(fp,'Command').Items.Count))

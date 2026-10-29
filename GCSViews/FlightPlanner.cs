@@ -174,7 +174,7 @@ namespace MissionPlanner.GCSViews
 
             // get map type
             comboBoxMapType.ValueMember = "Name";
-            comboBoxMapType.DataSource = new GMapProvider[] { GoogleSatelliteMapProvider.Instance };
+            comboBoxMapType.DataSource = new GMapProvider[] { GoogleSatelliteMapProvider.Instance, BingSatelliteMapProvider.Instance };
             comboBoxMapType.SelectedItem = MainMap.MapProvider;
 
             comboBoxMapType.SelectedValueChanged += comboBoxMapType_SelectedValueChanged;
@@ -1317,7 +1317,7 @@ namespace MissionPlanner.GCSViews
             lnk_kml.Visible = false;
             chk_grid.Checked = false;
             chk_grid.Visible = false;
-            comboBoxMapType.Enabled = false;
+            comboBoxMapType.Enabled = true;
             cmb_missiontype.Enabled = false;
             // 测距使用 polygonsoverlay，保留该共享图层；仅去掉清单外叠加。
             foreach (var overlay in new[] { kmlpolygonsoverlay, geofenceoverlay, rallypointoverlay,
@@ -2186,31 +2186,15 @@ namespace MissionPlanner.GCSViews
         {
             try
             {
-                // check if we are setting the initial state
-                if (MainMap.MapProvider != GMapProviders.EmptyProvider &&
-                    (GMapProvider) comboBoxMapType.SelectedItem == MapboxUser.Instance)
-                {
-                    var url = Settings.Instance["MapBoxURL", ""];
-                    InputBox.Show("Enter MapBox Share URL", "Enter MapBox Share URL", ref url);
-                    var match = Regex.Matches(url, @"\/styles\/[^\/]+\/([^\/]+)\/([^\/\.]+).*access_token=([^#&=]+)");
-                    if (match != null)
-                    {
-                        MapboxUser.Instance.UserName = match[0].Groups[1].Value;
-                        MapboxUser.Instance.StyleId = match[0].Groups[2].Value;
-                        MapboxUser.Instance.MapKey = match[0].Groups[3].Value;
-                        Settings.Instance["MapBoxURL"] = url;
-                    }
-                    else
-                    {
-                        CustomMessageBox.Show(Strings.InvalidField, Strings.ERROR);
-                        return;
-                    }
-                }
-
-                MainMap.MapProvider = (GMapProvider) comboBoxMapType.SelectedItem;
-                if(FlightData.mymap != null)
-                    FlightData.mymap.MapProvider = (GMapProvider) comboBoxMapType.SelectedItem;
-                Settings.Instance["MapType"] = comboBoxMapType.Text;
+                var provider = comboBoxMapType.SelectedItem as GMapProvider;
+                if (provider != GoogleSatelliteMapProvider.Instance && provider != BingSatelliteMapProvider.Instance)
+                    return;
+                MainMap.MapProvider = provider;
+                if (FlightData.mymap != null)
+                    FlightData.mymap.MapProvider = provider;
+                // 保存稳定标识，避免语言变化后无法恢复所选底图。
+                Settings.Instance["MapType"] = provider == BingSatelliteMapProvider.Instance
+                    ? "BingSatelliteMap" : "GoogleSatelliteMap";
             }
             catch (Exception ex)
             {
@@ -5029,6 +5013,8 @@ namespace MissionPlanner.GCSViews
 
                 if (prefetchRunning)
                     return;
+                // 一次下载固定使用开始时选中的影像，切换显示不改变后续层级。
+                var prefetchProvider = MainMap.MapProvider;
                 prefetchRunning = true;
                 prefetchToolStripMenuItem.Enabled = false;
                 int downloadedTiles = 0;
@@ -5040,7 +5026,7 @@ namespace MissionPlanner.GCSViews
                         using (var progress = new TilePrefetcher())
                         {
                             ThemeManager.ApplyThemeTo(progress);
-                            await progress.StartNonModal(area, i, MainMap.MapProvider, 20, 0);
+                            await progress.StartNonModal(area, i, prefetchProvider, 20, 0);
                             downloadedTiles += progress.CompletedTiles;
                             totalTiles += progress.TotalTiles;
                             lbl_status.Text = string.Format(downloadedTiles == totalTiles
@@ -6954,12 +6940,18 @@ Column 1: Field type (RALLY is the only one at the moment -- may have RALLY_LAND
 
         private void updateMapType(object sender, System.Timers.ElapsedEventArgs e)
         {
-            // 项目固定使用谷歌卫星图，不恢复旧配置中的其他底图。
-            comboBoxMapType.SelectedItem = GoogleSatelliteMapProvider.Instance;
-            MainMap.MapProvider = GoogleSatelliteMapProvider.Instance;
+            // 仅恢复本项目支持的两种影像；兼容旧配置中的本地化名称。
+            var saved = Settings.Instance["MapType", "GoogleSatelliteMap"];
+            GMapProvider provider = saved == "BingSatelliteMap" || saved == BingSatelliteMapProvider.Instance.Name
+                ? (GMapProvider)BingSatelliteMapProvider.Instance : GoogleSatelliteMapProvider.Instance;
+            comboBoxMapType.SelectedItem = provider;
+            MainMap.MapProvider = provider;
+            MainMap.EmptyTileText = "影像未加载，请查看错误信息。";
             if (FlightData.mymap != null)
-                FlightData.mymap.MapProvider = GoogleSatelliteMapProvider.Instance;
-            Settings.Instance["MapType"] = "GoogleSatelliteMap";
+            {
+                FlightData.mymap.MapProvider = provider;
+                FlightData.mymap.EmptyTileText = "影像未加载，请查看错误信息。";
+            }
         }
 
         private void updateRowNumbers()

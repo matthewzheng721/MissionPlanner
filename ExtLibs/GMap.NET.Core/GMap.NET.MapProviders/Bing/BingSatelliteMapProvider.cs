@@ -19,6 +19,14 @@ namespace GMap.NET.MapProviders
          Instance = new BingSatelliteMapProvider();
       }
 
+      private int initializationStarted;
+
+      public override void OnInitialized()
+      {
+         // 首次切换底图不在界面线程等待版本或凭据查询，仍复用原初始化逻辑。
+         if (System.Threading.Interlocked.Exchange(ref initializationStarted, 1) == 0)
+            System.Threading.Tasks.Task.Run(() => base.OnInitialized());
+      }
       #region GMapProvider Members
 
       readonly Guid id = new Guid("3AC742DD-966B-4CFB-B67D-33E7F82F2D37");
@@ -56,6 +64,6 @@ namespace GMap.NET.MapProviders
 
       // http://ecn.t1.tiles.virtualearth.net/tiles/a12030003131321231.jpeg?g=875&mkt=en-us&n=z
 
-      static readonly string UrlFormat = "http://ecn.t{0}.tiles.virtualearth.net/tiles/a{1}.jpeg?g={2}&mkt={3}&n=z{4}";
+      static readonly string UrlFormat = "https://ecn.t{0}.tiles.virtualearth.net/tiles/a{1}.jpeg?g={2}&mkt={3}&n=z{4}";
    }
 }

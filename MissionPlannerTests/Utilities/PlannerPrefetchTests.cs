@@ -1,4 +1,4 @@
-﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Reflection;
 using System.IO;
@@ -40,8 +40,10 @@ namespace MissionPlannerTests.Utilities
             }
         }
 
-        [TestMethod]
-        public void MemoryHitIsPersistedAndReadableInCacheOnlyMode()
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public void MemoryHitIsPersistedAndReadableInCacheOnlyMode(bool bing)
         {
             RunSta(() =>
             {
@@ -57,7 +59,7 @@ namespace MissionPlannerTests.Utilities
                     maps.PrimaryCache = new MyImageCache { CacheLocation = Path.Combine(Path.GetTempPath(), "MP-PlannerMapTests", Guid.NewGuid().ToString()) + Path.DirectorySeparatorChar };
                     maps.Mode = AccessMode.CacheOnly;
                     maps.UseMemoryCache = true;
-                    var provider = GoogleSatelliteMapProvider.Instance;
+                    GMapProvider provider = bing ? (GMapProvider)BingSatelliteMapProvider.Instance : GoogleSatelliteMapProvider.Instance;
                     var imageBytes = new LocalTileProvider().Image;
                     var area = new RectLatLng(10, 10, .01, .01);
                     var tiles = provider.Projection.GetAreaTileList(area, 4, 0);
@@ -87,6 +89,9 @@ namespace MissionPlannerTests.Utilities
                         Exception error;
                         using (var image = maps.GetImageFrom(provider, tile, 4, out error))
                             Assert.IsNotNull(image, "脱离内存缓存后仍应能读取预下载瓦片。");
+                        GMapProvider other = bing ? (GMapProvider)GoogleSatelliteMapProvider.Instance : BingSatelliteMapProvider.Instance;
+                        using (var image = maps.GetImageFrom(other, tile, 4, out error))
+                            Assert.IsNull(image, "相同坐标的不同影像缓存不能串用。");
                     }
                 }
                 finally

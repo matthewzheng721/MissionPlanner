@@ -45,7 +45,15 @@ namespace GMap.NET.MapProviders
       {
          string url = MakeTileImageUrl(pos, zoom, LanguageStr);
 
-         return GetTileImageUsingHttp(url);
+         try
+         {
+            return GetTileImageUsingHttp(url);
+         }
+         catch (System.Net.WebException ex) when (ex.Message.StartsWith("403 ", StringComparison.Ordinal))
+         {
+            // 明确区分服务端拒绝请求与区域无影像，不自动切换数据源。
+            throw new System.Net.WebException("Google 拒绝地图请求（403）。请稍后重试，或手动选择必应卫星地图。", ex);
+         }
       }
 
       #endregion
