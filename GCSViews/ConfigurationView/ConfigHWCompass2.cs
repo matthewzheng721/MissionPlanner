@@ -13,6 +13,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
     public partial class ConfigHWCompass2 : MyUserControl, IActivate, IDeactivate
     {
         private List<CompassDeviceInfo> list;
+        private readonly Label projectStatus = new Label { AutoSize = true };
 
         private bool rebootrequired = false;
 
@@ -81,74 +82,22 @@ namespace MissionPlanner.GCSViews.ConfigurationView
         public ConfigHWCompass2()
         {
             InitializeComponent();
+            foreach (Control control in Controls) control.Visible = control == but_largemagcal;
+            projectStatus.Location = new System.Drawing.Point(but_largemagcal.Left, but_largemagcal.Bottom + 8);
+            projectStatus.Text = "需要 GPS 定位；输入当前真航向，非磁航向。";
+            Controls.Add(projectStatus);
         }
 
         public void Activate()
         {
-            // COMPASS_DEV_ID get a list of all connected devices
-            list = MainV2.comPort.MAV.param.Where(a => a.Name.StartsWith("COMPASS") && a.Name.Contains("DEV_ID") && a.Value != 0)
-                .Select((a, b) => new CompassDeviceInfo(b, a.Name, (uint) a.Value))
-                .OrderBy((a) => a.ParamName).ToList();
-
-            // COMPASS_PRIO get a list of all prios
-            var prio = MainV2.comPort.MAV.param.Where(a => a.Name.StartsWith("COMPASS_PRIO") && a.Value != 0)
-                .Select((a, b) => new CompassDeviceInfo(b, a.Name, (uint)a.Value))
-                .OrderBy((a) => a.ParamName).ToList();
-
-            var anymissing = false;
-            // mark missing
-            prio.ForEach(a =>
-            {
-                if (a.DevID == 0 || list.Any(b => b.DevID == a.DevID))
-                    a.Missing = false;
-                else
-                {
-                    a.Missing = true;
-                    anymissing = true;
-                }
-            });
-
-            //filter list removing prio dups from the list
-            list = list.Where(a => !prio.Any(b => b.DevID == a.DevID)).ToList();
-
-            // insert prios at the top
-            list.InsertRange(0, prio);
-
-            var bs = new BindingSource();
-            bs.DataSource = list;
-            myDataGridView1.DataSource = bs;
-
-            mavlinkComboBoxfitness.setup(ParameterMetaDataRepository.GetParameterOptionsInt("COMPASS_CAL_FIT",
-                MainV2.comPort.MAV.cs.firmware.ToString()), "COMPASS_CAL_FIT", MainV2.comPort.MAV.param);
-
-            mavlinkCheckBoxUseCompass1.setup(1, 0, new[] { "COMPASS_USE", "COMPASS1_USE"}, MainV2.comPort.MAV.param);
-            mavlinkCheckBoxUseCompass2.setup(1, 0, new[] { "COMPASS_USE2", "COMPASS2_USE"}, MainV2.comPort.MAV.param);
-            mavlinkCheckBoxUseCompass3.setup(1, 0, new[] { "COMPASS_USE3", "COMPASS3_USE"}, MainV2.comPort.MAV.param);
-
-            CHK_compass_learn.setup(1, 0, "COMPASS_LEARN", MainV2.comPort.MAV.param);
-
-            {
-                // set the default items
-                var orient_param = MainV2.comPort.MAV.param[new[] { "COMPASS_ORIENT", "COMPASS1_ORIENT"}];
-                var source = ParameterMetaDataRepository.GetParameterOptionsInt(orient_param.Name,
-                        MainV2.comPort.MAV.cs.firmware.ToString())
-                    .Select(a => new KeyValuePair<string, string>(a.Key.ToString(), a.Value)).ToList();
-                Orientation.DataSource = source;
-                Orientation.DisplayMember = "Value";
-                Orientation.ValueMember = "Key";
-            }
-
-            if (anymissing)
-            {
-                CustomMessageBox.Show("Your compass configuration has changed, please review the missing compass", Strings.ERROR);
-            }
+            // 不初始化已移除的罗盘配置、排序及旋转校准控件。
         }
 
         public void Deactivate()
         {
             timer1.Stop();
 
-            CheckReboot();
+            // 本页只执行大飞机校准，不产生其他配置的重启提示。
         }
 
         private bool CheckReboot()
@@ -473,30 +422,36 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             }
         }
 
-        private void but_largemagcal_Click(object sender, EventArgs e)
+        private async void but_largemagcal_Click(object sender, EventArgs e)
         {
             double value = 0;
-            if (InputBox.Show("MagCal Yaw", "Enter current heading in degrees\nNOTE: gps lock is required. Heading is true, not magnetic", ref value) == DialogResult.OK)
+            if (InputBox.Show("大飞机罗盘校准", "请输入当前真航向（度）。\n需要 GPS 定位；这里是真航向，不是磁航向。", ref value) != DialogResult.OK)
+                return;
+            if (double.IsNaN(value) || double.IsInfinity(value) || value < 0 || value >= 360)
             {
-                try
-                {
-                    if (MainV2.comPort.doCommand(MainV2.comPort.MAV.sysid, MainV2.comPort.MAV.compid,
-                        MAVLink.MAV_CMD.FIXED_MAG_CAL_YAW, (float) value, 0, 0, 0, 0, 0, 0))
-                    {
-                        CustomMessageBox.Show(Strings.Completed, Strings.Completed);
-                    }
-                    else
-                    {
-                        CustomMessageBox.Show(Strings.CommandFailed, Strings.ERROR);
-                    }
-                }
-                catch (Exception)
-                {
-                    CustomMessageBox.Show(Strings.CommandFailed, Strings.ERROR);
-                }
+                projectStatus.Text = "真航向应在 0（含）至 360（不含）度之间。";
+                return;
+            }
+            but_largemagcal.Enabled = false;
+            projectStatus.Text = "正在执行大飞机罗盘校准…";
+            var port = MainV2.comPort;
+            var sysid = port.MAV.sysid;
+            var compid = port.MAV.compid;
+            try
+            {
+                var completed = await Task.Run(() => port.doCommand(sysid, compid,
+                    MAVLink.MAV_CMD.FIXED_MAG_CAL_YAW, (float)value, 0, 0, 0, 0, 0, 0));
+                if (!IsDisposed) projectStatus.Text = completed ? "大飞机罗盘校准完成" : "校准失败，请检查 GPS 定位及飞控消息。";
+            }
+            catch (Exception ex)
+            {
+                if (!IsDisposed) projectStatus.Text = "校准失败：" + ex.Message;
+            }
+            finally
+            {
+                if (!IsDisposed) but_largemagcal.Enabled = true;
             }
         }
-
         private void but_reboot_Click(object sender, EventArgs e)
         {
             if (CustomMessageBox.Show("Reboot?") == CustomMessageBox.DialogResult.OK)

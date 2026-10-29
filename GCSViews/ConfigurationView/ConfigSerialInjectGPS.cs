@@ -323,8 +323,17 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             }
         }
 
+        private static bool connecting;
+
         public async Task DoConnect()
         {
+            if (connecting) return;
+            // 差分源连接是共享状态，切页或重复点击不能启动第二个连接。
+            connecting = true;
+            Enabled = false;
+            try
+            {
+
             status_line3 = null;
 
             try
@@ -399,7 +408,8 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                 try
                 {
                     if (!comPort.IsOpen)
-                        comPort.Open();
+                        await Task.Run(() => comPort.Open());
+                    if (IsDisposed) { comPort.Close(); return; }
 
                     if (comPort is SerialPort)
                     {
@@ -421,7 +431,8 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
                     try
                     {
-                        comPort.Open();
+                        await Task.Run(() => comPort.Open());
+                    if (IsDisposed) { comPort.Close(); return; }
                     }
                     catch
                     {
@@ -458,7 +469,9 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
                 try
                 {
-                    ubx_m8p.SetupM8P(comPort, chk_m8p_130p.Checked);
+                    var version130 = chk_m8p_130p.Checked;
+                    await Task.Run(() => ubx_m8p.SetupM8P(comPort, version130));
+                    if (IsDisposed) { comPort.Close(); return; }
                 }
                 catch (Exception ex)
                 {
@@ -471,9 +484,12 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
                 if (basepos != PointLatLngAlt.Zero)
                 {
-                    ubx_m8p.SetupBasePos(comPort, basepos, 0, 0, true);
-
-                    ubx_m8p.SetupBasePos(comPort, basepos, 0, 0, false);
+                    await Task.Run(() =>
+                    {
+                        ubx_m8p.SetupBasePos(comPort, basepos, 0, 0, true);
+                        ubx_m8p.SetupBasePos(comPort, basepos, 0, 0, false);
+                    });
+                    if (IsDisposed) { comPort.Close(); return; }
                 }
 
                 CMB_baudrate.Text = "460800";
@@ -520,6 +536,13 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             bytes = 0;
             invalidateRTCMStatus();
             panel1.Controls.Clear();
+
+            }
+            finally
+            {
+                connecting = false;
+                if (!IsDisposed) Enabled = true;
+            }
         }
 
         private async Task ConfigureUnicoreReceiver()

@@ -56,3 +56,11 @@ $script = (Resolve-Path '.\tools\Test-FlightDataScope.py').Path
 `Test-SatelliteMaps.py` 由 MP 的 `-script` 执行，不连接飞控。可设置 `MP_MAP_OUTPUT` 保存结果，`MP_MAP_LAT`、`MP_MAP_LNG`、`MP_MAP_ZOOM` 指定在线对照瓦片的位置与层级（区域预下载样例固定在 Canberra）；先从 Google 选项启动，可测量首次切换必应的耗时。脚本检查两个选项、飞行数据同步，直接请求在线瓦片，验证必应区域预下载、实际菜单及关闭内存缓存后的磁盘读取，并保存必应选择。重启时设置 `MP_MAP_EXPECT_BING=1` 再运行，可断言启动记忆和两页同步。
 
 输出 `result.txt`、`status.txt`（0 为选项/必应/缓存检查通过，1 为未完成或失败）及实际在线图片。Google 在线结果单独记录，Google 请求被拒绝时不会被标为在线成功，也不会自动替用户切换底图；脚本主动切换是测试步骤。测试结束保留必应选项，退出专用实例即可。`PlannerPrefetchTests` 对两种影像分别验证缓存落盘，并断言同一坐标不会读取另一种影像的缓存。
+
+## 初始设置验证
+
+`Test-InitialSetupScope.py` 由 MP 的 `-script` 入口执行。先启动本机固定翼 SITL（TCP 5760），使用独立 `-datadir`，可设置 `MP_INITIAL_OUTPUT` 保存结果。脚本检查固件页仅有本地入口、连接后五项菜单；F5 参数读取期间实际点击“启动电机→恢复”，检查只发送一次1300及一次2000，F5重建页面后再次核对原位反馈。另以受控400ms共享写锁占用验证按钮不会等待传输锁，再检查缺参和断线提示。脚本只连接本机，断言SITL参数及未解锁，结束前恢复模拟器原SERVO5_TRIM。
+
+脚本执行模拟器水平校准、大飞机罗盘校准，并以本机TCP差分源生成RTCM1005，验证原解析及MAVLink转发。此测试不代表实物刷写、串口基站、UDP/NTRIP接入或RTK Fixed已验证。未选择任何固件或连接真实设备。`ProjectMotorReadbackTests` 使用真实编码MAVLink回包，验证较早的1300不能确认较新的2000，并覆盖PARAM_FLOAT编码。
+
+输出 `result.txt`、`status.txt`（0成功、1失败/未完成）及 `telemetry.csv`（UI定时器间隔与遥测包龄）。可选 `MP_INITIAL_CAPTURE=1` 会在2000回读后输出主窗口 `handle.txt` 并等待最多90秒，外部完成截图检查后创建同目录 `capture.done` 继续；普通复跑不要设置此变量。结束后关闭测试实例和本轮模拟器。测试使用本机TCP，不能据此保证低速数传耗时或电机实际动作。

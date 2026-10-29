@@ -1,8 +1,9 @@
-﻿using log4net;
+using log4net;
 using MissionPlanner.Controls;
 using System;
 using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace MissionPlanner.GCSViews.ConfigurationView
@@ -22,6 +23,8 @@ namespace MissionPlanner.GCSViews.ConfigurationView
         public ConfigAccelerometerCalibration()
         {
             InitializeComponent();
+            foreach (Control control in Controls)
+                control.Visible = control == BUT_level || control == label1;
         }
 
         public void Activate()
@@ -32,7 +35,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
         public void Deactivate()
         {
-            MainV2.comPort.giveComport = false;
+            // 水平校准不占用串口独占标志，切页不改变其他操作的通信状态。
             _incalibrate = false;
         }
 
@@ -140,28 +143,30 @@ namespace MissionPlanner.GCSViews.ConfigurationView
            });
         }
 
-        private void BUT_level_Click(object sender, EventArgs e)
+        private async void BUT_level_Click(object sender, EventArgs e)
         {
+            if (!BUT_level.Enabled) return;
+            BUT_level.Enabled = false;
+            BUT_level.Text = "正在校准…";
+            var port = MainV2.comPort;
+            var sysid = port.MAV.sysid;
+            var compid = port.MAV.compid;
             try
             {
-                Log.Info("Sending level command (mavlink 1.0)");
-                if (MainV2.comPort.doCommand((byte) MainV2.comPort.sysidcurrent, (byte) MainV2.comPort.compidcurrent,
-                    MAVLink.MAV_CMD.PREFLIGHT_CALIBRATION, 0, 0, 0, 0, 2, 0, 0))
-                {
-                    BUT_level.Text = Strings.Completed;
-                }
-                else
-                {
-                    CustomMessageBox.Show(Strings.CommandFailed, Strings.ERROR);
-                }
+                var completed = await Task.Run(() => port.doCommand(sysid, compid,
+                    MAVLink.MAV_CMD.PREFLIGHT_CALIBRATION, 0, 0, 0, 0, 2, 0, 0));
+                if (!IsDisposed) BUT_level.Text = completed ? "校准水平完成" : "校准水平失败";
             }
             catch (Exception ex)
             {
-                Log.Error("Exception on level", ex);
-                CustomMessageBox.Show("Failed to level", Strings.ERROR);
+                Log.Error("水平校准失败", ex);
+                if (!IsDisposed) BUT_level.Text = "校准水平失败";
+            }
+            finally
+            {
+                if (!IsDisposed) BUT_level.Enabled = true;
             }
         }
-
         private void BUT_simpleAccelCal_Click(object sender, EventArgs e)
         {
             try

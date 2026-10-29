@@ -24,6 +24,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
         APFirmware.RELEASE_TYPES REL_Type = APFirmware.RELEASE_TYPES.OFFICIAL;
         private string detectedport { get; set; } = "";
         private long? detectedboardid;
+        private static Task<bool> localUpload;
 
         public ConfigFirmwareManifest()
         {
@@ -44,55 +45,28 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
         public void Activate()
         {
-            MainV2.instance.DeviceChanged -= Instance_DeviceChanged;
-            MainV2.instance.DeviceChanged += Instance_DeviceChanged;
-
-            // Until we connect to the internet, disable all controls that require it
-            // Disable all ImageLabels
-            foreach (Control c in this.Controls)
-            {
-                if (c is ImageLabel)
-                {
-                    c.Enabled = false;
-                }
-            }
-            // Disable "All Options" and "Beta Firmwares"
-            lbl_alloptions.Enabled = false;
-            lbl_devfw.Enabled = false;
-
+            // 本地安装不获取在线清单，也不因设备插入自动扫描其他串口。
+            foreach (Control control in Controls)
+                control.Visible = control == lbl_Custom_firmware_label || control == lbl_status || control == progress;
+            lbl_Custom_firmware_label.Text = "加载本地 .apj 固件并安装";
+            lbl_status.Text = "请选择与目标飞控匹配的本地 .apj 文件。";
             flashdone = false;
-
-            Task.Run(() =>
-            {
-                APFirmware.GetList("https://firmware.oborne.me/manifest.json.gz");
-
-                var options = APFirmware.GetRelease(REL_Type);
-
-                // get max version for each mavtype
-                options = options.GroupBy(b => b.MavType).Select(a =>
-                    a.Where(b => a.Key == b.MavType && b.MavFirmwareVersion == a.Max(c => c.MavFirmwareVersion))
-                        .FirstOrDefault()).ToList();
-
-                UpdateIconName(pictureAntennaTracker,
-                    options.First(a => a.MavType == APFirmware.MAV_TYPE.ANTENNA_TRACKER.ToString()));
-                UpdateIconName(pictureBoxHeli,
-                    options.First(a => a.MavType == APFirmware.MAV_TYPE.HELICOPTER.ToString()));
-                UpdateIconName(pictureBoxSub,
-                    options.First(a => a.MavType == APFirmware.MAV_TYPE.SUBMARINE.ToString()));
-                UpdateIconName(pictureBoxRover,
-                    options.First(a => a.MavType == APFirmware.MAV_TYPE.GROUND_ROVER.ToString()));
-                UpdateIconName(pictureBoxOctaQuad,
-                    options.First(a => a.MavType == APFirmware.MAV_TYPE.Copter.ToString()));
-                UpdateIconName(pictureBoxOcta, options.First(a => a.MavType == APFirmware.MAV_TYPE.Copter.ToString()));
-                UpdateIconName(pictureBoxY6, options.First(a => a.MavType == APFirmware.MAV_TYPE.Copter.ToString()));
-                UpdateIconName(pictureBoxTri, options.First(a => a.MavType == APFirmware.MAV_TYPE.Copter.ToString()));
-                UpdateIconName(pictureBoxHexa, options.First(a => a.MavType == APFirmware.MAV_TYPE.Copter.ToString()));
-                UpdateIconName(pictureBoxQuad, options.First(a => a.MavType == APFirmware.MAV_TYPE.Copter.ToString()));
-                UpdateIconName(pictureBoxPlane,
-                    options.First(a => a.MavType == APFirmware.MAV_TYPE.FIXED_WING.ToString()));
-            });
+            ObserveLocalUpload();
         }
-
+        private async void ObserveLocalUpload()
+        {
+            var upload = localUpload;
+            if (upload == null || upload.IsCompleted) return;
+            lbl_Custom_firmware_label.Enabled = false;
+            lbl_status.Text = "正在安装本地固件…";
+            try { await upload; }
+            catch (Exception ex) { log.Error("本地固件安装失败", ex); }
+            if (!IsDisposed)
+            {
+                lbl_Custom_firmware_label.Enabled = true;
+                lbl_status.Text = "本地固件安装操作已结束，请核对安装结果。";
+            }
+        }
         private void UpdateIconName(ImageLabel imageLabel, APFirmware.FirmwareInfo first)
         {
             if (first == null)
@@ -366,6 +340,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
         /// <param name="status"></param>
         private void fw_Progress1(int progress, string status)
         {
+            if (IsDisposed || Disposing || !IsHandleCreated) return;
             this.BeginInvokeIfRequired(() =>
             {
                 var change = false;
@@ -410,16 +385,22 @@ namespace MissionPlanner.GCSViews.ConfigurationView
         private string custom_fw_dir = Settings.Instance["FirmwareFileDirectory"] ?? "";
         private bool flashdone = false;
 
-        private void Lbl_Custom_firmware_label_Click(object sender, EventArgs e)
+        private async void Lbl_Custom_firmware_label_Click(object sender, EventArgs e)
         {
+            if (localUpload != null && !localUpload.IsCompleted) return;
             using (var fd = new OpenFileDialog
-                {Filter = "Firmware (*.hex;*.px4;*.vrx;*.apj)|*.hex;*.px4;*.vrx;*.apj|DFU|*.hex;*.bin;*.dfu|All files (*.*)|*.*"})
+                {Filter = "ArduPilot 固件 (*.apj)|*.apj"})
             {
                 if (Directory.Exists(custom_fw_dir))
                     fd.InitialDirectory = custom_fw_dir;
-                fd.ShowDialog();
+                if (fd.ShowDialog() != DialogResult.OK) return;
                 if (File.Exists(fd.FileName))
                 {
+                    if (!string.Equals(Path.GetExtension(fd.FileName), ".apj", StringComparison.OrdinalIgnoreCase))
+                    {
+                        lbl_status.Text = "仅支持本地 .apj 固件。";
+                        return;
+                    }
                     custom_fw_dir = Path.GetDirectoryName(fd.FileName);
                     Settings.Instance["FirmwareFileDirectory"] = custom_fw_dir;
 
@@ -499,11 +480,18 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
                     try
                     {
-                        fw.UploadFlash(MainV2.comPortName, fd.FileName, boardtype);
+                        lbl_Custom_firmware_label.Enabled = false;
+                        var selectedPort = MainV2.comPortName;
+                        localUpload = Task.Run(() => fw.UploadFlash(selectedPort, fd.FileName, boardtype));
+                        await localUpload;
                     }
                     catch (Exception ex)
                     {
                         CustomMessageBox.Show(ex.ToString(), Strings.ERROR);
+                    }
+                    finally
+                    {
+                        if (!IsDisposed) lbl_Custom_firmware_label.Enabled = true;
                     }
                 }
             }
