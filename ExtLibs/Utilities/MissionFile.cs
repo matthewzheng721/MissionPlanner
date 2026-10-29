@@ -111,7 +111,8 @@ namespace MissionPlanner.Utilities
 
             foreach (var missionItem in format.mission.items)
             {
-                if (missionItem.type != "SimpleItem")
+                // 旧版 MP 写出的普通任务项没有 type，继续兼容这些本地文件。
+                if (missionItem.type != "SimpleItem" && missionItem.type != null)
                 {
                     if (missionItem.type == "ComplexItem")
                     {
@@ -130,7 +131,8 @@ namespace MissionPlanner.Utilities
 
         public static Locationwp ConvertFromMissionItem(List<double> missionItem)
         {
-            return new Locationwp() {alt = (float)missionItem[2], lat = missionItem[0], lng = missionItem[1]};
+            return new Locationwp() { id = (ushort)MAVLink.MAV_CMD.WAYPOINT, frame = (byte)MAVLink.MAV_FRAME.GLOBAL,
+                alt = (float)missionItem[2], lat = missionItem[0], lng = missionItem[1] };
         }
 
         public static Locationwp ConvertFromMissionItem(Item missionItem)
@@ -140,7 +142,9 @@ namespace MissionPlanner.Utilities
 
         public static Item ConvertFromLocationwp(Locationwp locationwp)
         {
-            return locationwp;
+            Item item = locationwp;
+            item.type = "SimpleItem";
+            return item;
         }
 
         //http://json2csharp.com/#
@@ -266,8 +270,8 @@ namespace MissionPlanner.Utilities
 
                     var temploc = ConvertFromLocationwp(item);
 
-                    // set frame type
-                    temploc.frame = frame;
+                    // 保留各任务行的高度参考系，不用页面默认值覆盖混合参考系。
+                    temploc.frame = item.frame;
 
                     temp.mission.items.Add(temploc);
 

@@ -24,6 +24,12 @@ namespace GMap.NET
       int sleep;
       int all;
       public bool ShowCompleteMessage = false;
+      private bool nonModal;
+      private bool completing;
+      private System.Threading.Tasks.TaskCompletionSource<bool> completion;
+      public int CompletedTiles { get; private set; }
+      public int TotalTiles { get { return all; } }
+      public Exception DownloadError { get; private set; }
       RectLatLng area;
       GMap.NET.GSize maxOfTiles;
       public GMapOverlay Overlay;
@@ -107,6 +113,26 @@ namespace GMap.NET
          }
       }
 
+      // 非模态下载不修改其他地图使用的全局缓存策略。
+      public System.Threading.Tasks.Task StartNonModal(RectLatLng area, int zoom, GMapProvider provider, int sleep, int retry)
+      {
+          nonModal = true;
+          completion = new System.Threading.Tasks.TaskCompletionSource<bool>();
+          FormClosing += (sender, args) =>
+          {
+              if (!completing && worker.IsBusy)
+              {
+                  UserAborted = true;
+                  worker.CancelAsync();
+                  done.Set();
+                  label1.Text = "正在取消地图预下载…";
+                  args.Cancel = true;
+              }
+          };
+          Start(area, zoom, provider, sleep, retry);
+          return completion.Task;
+      }
+
       public void Start(RectLatLng area, int zoom, GMapProvider provider, int sleep, int retry)
       {
          if(!worker.IsBusy)
@@ -120,9 +146,12 @@ namespace GMap.NET
             this.sleep = sleep;
             this.retry = retry;
 
-            GMaps.Instance.UseMemoryCache = false;
-            GMaps.Instance.CacheOnIdleRead = false;
-            GMaps.Instance.BoostCacheEngine = true;
+            if (!nonModal)
+            {
+                GMaps.Instance.UseMemoryCache = false;
+                GMaps.Instance.CacheOnIdleRead = false;
+                GMaps.Instance.BoostCacheEngine = true;
+            }
 
             if (Overlay != null)
             {
@@ -131,7 +160,7 @@ namespace GMap.NET
 
             worker.RunWorkerAsync();
 
-            this.ShowDialog();
+            if (nonModal) Show(); else ShowDialog();
          }
       }
 
@@ -148,7 +177,7 @@ namespace GMap.NET
             worker.CancelAsync();
          }
 
-         GMaps.Instance.CancelTileCaching();
+         if (!nonModal) GMaps.Instance.CancelTileCaching();
 
          done.Close();
       }
@@ -169,15 +198,21 @@ namespace GMap.NET
             }
          }
 
-         list.Clear();
-
-         GMaps.Instance.UseMemoryCache = true;
-         GMaps.Instance.CacheOnIdleRead = true;
-         GMaps.Instance.BoostCacheEngine = false;
+         DownloadError = e.Error;
+         CompletedTiles = e.Error == null && !e.Cancelled ? (int)e.Result : 0;
+         list?.Clear();
+         if (!nonModal)
+         {
+             GMaps.Instance.UseMemoryCache = true;
+             GMaps.Instance.CacheOnIdleRead = true;
+             GMaps.Instance.BoostCacheEngine = false;
+         }
+         completing = true;
 
          worker.Dispose();
 
          this.Close();
+         completion?.TrySetResult(true);
       }
 
       bool CacheTiles(int zoom, GPoint p)
@@ -205,8 +240,17 @@ namespace GMap.NET
 
             if(img != null)
             {
+               // 内存命中不保证落盘，离线预下载必须确认写入持久缓存。
+               bool saved = true;
+               if (nonModal)
+               {
+                   var target = pr.InvertedAxisY ? new GPoint(p.X, maxOfTiles.Height - p.Y) : p;
+                   saved = GMaps.Instance.PrimaryCache != null &&
+                       GMaps.Instance.PrimaryCache.PutImageToCache(img.Data.ToArray(), pr.DbId, target, zoom);
+               }
                img.Dispose();
                img = null;
+               if (!saved) return false;
             }
             else
             {
@@ -289,7 +333,7 @@ namespace GMap.NET
 
          e.Result = countOk;
 
-         if(!IsDisposed)
+         if(!IsDisposed && !nonModal)
          {
              try
              {

@@ -249,7 +249,8 @@ namespace MissionPlanner
                 {
                     // trying to set it true twice
                     log.Error(new System.Diagnostics.StackTrace().ToString());
-                    Debugger.Break();
+                    // 运行版不触发系统调试器；调试会话仍保留重入断点。
+                    if (Debugger.IsAttached) Debugger.Break();
                 }
 
                 if (value == true)

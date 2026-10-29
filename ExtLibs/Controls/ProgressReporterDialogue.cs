@@ -57,6 +57,13 @@ namespace MissionPlanner.Controls
             this.ShowDialog();
         }
 
+        // 非模态入口复用原后台操作、取消和错误显示，默认模态调用保持不变。
+        public void RunBackgroundOperationNonModal(IWin32Window owner)
+        {
+            Show(owner);
+            ThreadPool.QueueUserWorkItem(RunBackgroundOperation);
+        }
+
         private void RunBackgroundOperation(object o)
         {
             Running = true;

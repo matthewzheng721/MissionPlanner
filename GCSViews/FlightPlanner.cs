@@ -63,6 +63,7 @@ namespace MissionPlanner.GCSViews
         {
             InitializeComponent();
             Init();
+            ApplyProjectPlannerScope();
         }
 
 
@@ -173,7 +174,7 @@ namespace MissionPlanner.GCSViews
 
             // get map type
             comboBoxMapType.ValueMember = "Name";
-            comboBoxMapType.DataSource = GMapProviders.List.ToArray();
+            comboBoxMapType.DataSource = new GMapProvider[] { GoogleSatelliteMapProvider.Instance };
             comboBoxMapType.SelectedItem = MainMap.MapProvider;
 
             comboBoxMapType.SelectedValueChanged += comboBoxMapType_SelectedValueChanged;
@@ -213,7 +214,7 @@ namespace MissionPlanner.GCSViews
 
             MainMap.Overlays.Add(poioverlay);
 
-            prop = new Propagation(MainMap);
+            // 未保留传播覆盖叠加，不创建其后台计算实例。
 
             top = new GMapOverlay("top");
             //MainMap.Overlays.Add(top);
@@ -238,7 +239,7 @@ namespace MissionPlanner.GCSViews
             CMB_altmode.SelectedItem = altmode.Relative;
 
             cmb_missiontype.DataSource = new List<MAVLink.MAV_MISSION_TYPE>()
-                {MAVLink.MAV_MISSION_TYPE.MISSION, MAVLink.MAV_MISSION_TYPE.FENCE, MAVLink.MAV_MISSION_TYPE.RALLY};
+                {MAVLink.MAV_MISSION_TYPE.MISSION};
 
             updateCMDParams();
 
@@ -296,6 +297,8 @@ namespace MissionPlanner.GCSViews
 
         public void Activate()
         {
+            if (missionTransferRunning)
+                return;
             timer1.Start();
 
             // hide altmode if old copter version
@@ -309,11 +312,7 @@ namespace MissionPlanner.GCSViews
                 CMB_altmode.Visible = true;
             }
 
-            // hide spline wp options if not arducopter
-            if (MainV2.comPort.MAV.cs.firmware == Firmwares.ArduCopter2)
-                CHK_splinedefault.Visible = true;
-            else
-                CHK_splinedefault.Visible = false;
+            CHK_splinedefault.Visible = false;
 
             chk_usemavftp.Checked = Settings.Instance.GetBoolean("UseMissionMAVFTP", false);
 
@@ -344,71 +343,6 @@ namespace MissionPlanner.GCSViews
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            // undo
-            if (keyData == (Keys.Control | Keys.Z))
-            {
-                if (history.Count > 0)
-                {
-                    int no = history.Count - 1;
-                    var pop = history[no];
-                    history.RemoveAt(no);
-                    WPtoScreen(pop);
-                }
-
-                return true;
-            }
-
-            // open wp file
-            if (keyData == (Keys.Control | Keys.O))
-            {
-                loadWPFileToolStripMenuItem_Click(null, null);
-                return true;
-            }
-
-            // save wp file
-            if (keyData == (Keys.Control | Keys.S))
-            {
-                saveWPFileToolStripMenuItem_Click(null, null);
-                return true;
-            }
-
-            if (keyData == (Keys.Control | Keys.N))
-            {
-                GMapControl.GDI = !GMapControl.GDI;
-                return true;
-            }
-
-            if (keyData == (Keys.Control | Keys.M))
-            {
-                // get the command list from the datagrid
-                var commandlist = GetCommandList();
-                MainV2.comPort.MAV.wps[0] = new Locationwp().Set(MainV2.comPort.MAV.cs.PlannedHomeLocation.Lat,
-                    MainV2.comPort.MAV.cs.PlannedHomeLocation.Lng, MainV2.comPort.MAV.cs.PlannedHomeLocation.Alt, 0);
-                int a = 1;
-                commandlist.ForEach(i =>
-                {
-                    MAVLink.mavlink_mission_item_int_t item = i;
-                    item.seq = (ushort) a;
-                    MainV2.comPort.MAV.wps[a] = item;
-                    a++;
-                });
-
-                return true;
-            }
-
-            if (keyData == (Keys.Control | Keys.F | Keys.Shift))
-            {
-                but_writewpfast_Click(this, EventArgs.Empty);
-            }
-            if (keyData == (Keys.Control | Keys.W | Keys.Shift))
-            {
-                BUT_write_Click(this, EventArgs.Empty);
-            }
-            if (keyData == (Keys.Control | Keys.R | Keys.Shift))
-            {
-                BUT_read_Click(this, EventArgs.Empty);
-            }
-
             return base.ProcessCmdKey(ref msg, keyData);
         }
 
@@ -605,6 +539,8 @@ namespace MissionPlanner.GCSViews
         /// <param name="e"></param>
         public void BUT_read_Click(object sender, EventArgs e)
         {
+            if (missionTransferRunning)
+                return;
             if (Commands.Rows.Count > 0)
             {
                 if (sender is FlightData)
@@ -621,7 +557,7 @@ namespace MissionPlanner.GCSViews
                 }
             }
 
-            IProgressReporterDialogue frmProgressReporter = new ProgressReporterDialogue
+            ProgressReporterDialogue frmProgressReporter = new ProgressReporterDialogue
             {
                 StartPosition = FormStartPosition.CenterScreen,
                 Text = "Receiving WP's"
@@ -632,9 +568,7 @@ namespace MissionPlanner.GCSViews
 
             ThemeManager.ApplyThemeTo(frmProgressReporter);
 
-            frmProgressReporter.RunBackgroundOperationAsync();
-
-            frmProgressReporter.Dispose();
+            StartMissionTransfer(frmProgressReporter);
         }
 
         /// <summary>
@@ -642,8 +576,27 @@ namespace MissionPlanner.GCSViews
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="e"></param>
+        private bool missionTransferRunning;
+
+        private void StartMissionTransfer(ProgressReporterDialogue progress)
+        {
+            // 只锁定正在传输的任务编辑区，主菜单和飞行数据控制仍可使用。
+            missionTransferRunning = true;
+            Enabled = false;
+            progress.FormClosed += (sender, args) =>
+            {
+                missionTransferRunning = false;
+                if (!IsDisposed)
+                    Enabled = true;
+                progress.Dispose();
+            };
+            progress.RunBackgroundOperationNonModal(MainV2.instance);
+        }
+
         public void BUT_write_Click(object sender, EventArgs e)
         {
+            if (missionTransferRunning)
+                return;
             if ((altmode) CMB_altmode.SelectedValue == altmode.Absolute)
             {
                 if ((int) DialogResult.No ==
@@ -715,7 +668,7 @@ namespace MissionPlanner.GCSViews
                 }
             }
 
-            IProgressReporterDialogue frmProgressReporter = new ProgressReporterDialogue
+            ProgressReporterDialogue frmProgressReporter = new ProgressReporterDialogue
             {
                 StartPosition = FormStartPosition.CenterScreen,
                 Text = "Sending WP's"
@@ -727,9 +680,7 @@ namespace MissionPlanner.GCSViews
 
             ThemeManager.ApplyThemeTo(frmProgressReporter);
 
-            frmProgressReporter.RunBackgroundOperationAsync();
-
-            frmProgressReporter.Dispose();
+            StartMissionTransfer(frmProgressReporter);
 
             MainMap.Focus();
         }
@@ -1268,24 +1219,50 @@ namespace MissionPlanner.GCSViews
         /// <param name="lat"></param>
         /// <param name="lng"></param>
         /// <param name="alt"></param>
+        private bool mouseAltitudeQueryRunning;
+        private bool mouseAltitudeQueryPending;
+
+        private async void UpdateMouseAltitude()
+        {
+            mouseAltitudeQueryPending = true;
+            if (mouseAltitudeQueryRunning)
+                return;
+            mouseAltitudeQueryRunning = true;
+            try
+            {
+                while (mouseAltitudeQueryPending && !IsDisposed)
+                {
+                    mouseAltitudeQueryPending = false;
+                    var lat = mouseposdisplay.Lat;
+                    var lng = mouseposdisplay.Lng;
+                    var zoom = MainMap.Zoom;
+                    var data = await Task.Run(() => srtm.getAltitude(lat, lng, zoom));
+                    if (IsDisposed || mouseAltitudeQueryPending)
+                        continue;
+                    coords1.Lat = lat;
+                    coords1.Lng = lng;
+                    coords1.Alt = data.alt * CurrentState.multiplieralt;
+                    coords1.AltSource = data.altsource;
+                    coords1.AltUnit = CurrentState.AltUnit;
+                }
+            }
+            catch (Exception ex)
+            {
+                log.Error("光标高程查询失败", ex);
+            }
+            finally
+            {
+                mouseAltitudeQueryRunning = false;
+            }
+        }
+
         public void SetMouseDisplay(double lat, double lng, int alt)
         {
             mouseposdisplay.Lat = lat;
             mouseposdisplay.Lng = lng;
             mouseposdisplay.Alt = alt;
 
-            Task.Run(() =>
-            {
-                var altdata = srtm.getAltitude(mouseposdisplay.Lat, mouseposdisplay.Lng, MainMap.Zoom);
-                this.BeginInvokeIfRequired(() =>
-                {
-                    coords1.Lat = mouseposdisplay.Lat;
-                    coords1.Lng = mouseposdisplay.Lng;
-                    coords1.Alt = altdata.alt * CurrentState.multiplieralt;
-                    coords1.AltSource = altdata.altsource;
-                    coords1.AltUnit = CurrentState.AltUnit;
-                });
-            });
+            UpdateMouseAltitude();
 
             try
             {
@@ -1323,25 +1300,36 @@ namespace MissionPlanner.GCSViews
             }
         }
 
+        private void ApplyProjectPlannerScope()
+        {
+            contextMenuStrip1.Items.Clear();
+            contextMenuStrip1.Items.AddRange(new ToolStripItem[] { deleteWPToolStripMenuItem,
+                insertWpToolStripMenuItem, clearMissionToolStripMenuItem, setHomeHereToolStripMenuItem,
+                mapToolToolStripMenuItem, fileLoadSaveToolStripMenuItem });
+            mapToolToolStripMenuItem.DropDownItems.Clear();
+            mapToolToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { ContextMeasure, prefetchToolStripMenuItem });
+            fileLoadSaveToolStripMenuItem.DropDownItems.Clear();
+            fileLoadSaveToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { loadWPFileToolStripMenuItem, saveWPFileToolStripMenuItem });
+            CHK_splinedefault.Checked = false;
+            CHK_splinedefault.Visible = false;
+            BUT_InjectCustomMap.Visible = false;
+            progressBarInjectCustomMap.Visible = false;
+            lnk_kml.Visible = false;
+            chk_grid.Checked = false;
+            chk_grid.Visible = false;
+            comboBoxMapType.Enabled = false;
+            cmb_missiontype.Enabled = false;
+            // 测距使用 polygonsoverlay，保留该共享图层；仅去掉清单外叠加。
+            foreach (var overlay in new[] { kmlpolygonsoverlay, geofenceoverlay, rallypointoverlay,
+                airportsoverlay, drawnpolygonsoverlay, poioverlay })
+                MainMap.Overlays.Remove(overlay);
+        }
+
         public void updateDisplayView()
         {
-            rallyPointsToolStripMenuItem.Visible = MainV2.DisplayConfiguration.displayRallyPointsMenu;
-            geoFenceToolStripMenuItem.Visible = MainV2.DisplayConfiguration.displayGeoFenceMenu;
-            createSplineCircleToolStripMenuItem.Visible = MainV2.DisplayConfiguration.displaySplineCircleAutoWp;
-            textToolStripMenuItem.Visible = MainV2.DisplayConfiguration.displayTextAutoWp;
-            createCircleSurveyToolStripMenuItem.Visible = MainV2.DisplayConfiguration.displayCircleSurveyAutoWp;
-            pOIToolStripMenuItem.Visible = MainV2.DisplayConfiguration.displayPoiMenu;
-            trackerHomeToolStripMenuItem.Visible = MainV2.DisplayConfiguration.displayTrackerHomeMenu;
+            ApplyProjectPlannerScope();
+            // 保留原有高度校验与警告，不能因裁剪界面而移除任务保护。
             CHK_verifyheight.Visible = MainV2.DisplayConfiguration.displayCheckHeightBox;
-
-            //hide dynamically generated toolstrip items in the auto WP dropdown (these do not have name objects populated)
-            foreach (ToolStripItem item in autoWPToolStripMenuItem.DropDownItems)
-            {
-                if (item.Name.Equals(""))
-                {
-                    item.Visible = MainV2.DisplayConfiguration.displayPluginAutoWp;
-                }
-            }
         }
 
         public void updateHome()
@@ -1817,7 +1805,7 @@ namespace MissionPlanner.GCSViews
         {
             using (OpenFileDialog fd = new OpenFileDialog())
             {
-                fd.Filter = "All Supported Types|*.txt;*.waypoints;*.shp;*.plan;*.kml";
+                fd.Filter = "Mission|*.txt;*.waypoints;*.plan;*.mission";
                 if (Directory.Exists(Settings.Instance["WPFileDirectory"] ?? ""))
                     fd.InitialDirectory = Settings.Instance["WPFileDirectory"];
                 DialogResult result = fd.ShowDialog();
@@ -1826,34 +1814,12 @@ namespace MissionPlanner.GCSViews
                 if (File.Exists(file))
                 {
                     Settings.Instance["WPFileDirectory"] = Path.GetDirectoryName(file);
-                    if (file.ToLower().EndsWith(".shp"))
+                    var extension = Path.GetExtension(file).ToLowerInvariant();
+                    if (!new[] { ".txt", ".waypoints", ".plan", ".mission" }.Contains(extension))
                     {
-                        try
-                        {
-                            LoadSHPFile(file);
-                        }
-                        catch
-                        {
-                            CustomMessageBox.Show("Error opening File", Strings.ERROR);
-                            return;
-                        }
+                        CustomMessageBox.Show("请选择任务文件。", Strings.ERROR);
+                        return;
                     }
-                    else if (file.ToLower().EndsWith(".kml"))
-                    {
-                        try
-                        {
-                            var kml = File.ReadAllText(file);
-                            var parser = new Parser();
-                            parser.ElementAdded += processKMLMission;
-                            parser.ParseString(kml, false);
-                        }
-                        catch
-                        {
-                            CustomMessageBox.Show("Error opening File", Strings.ERROR);
-                            return;
-                        }
-                    }
-                    else
                     {
                         string line = "";
                         using (var fstream = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
@@ -1897,6 +1863,8 @@ namespace MissionPlanner.GCSViews
 
         public void but_writewpfast_Click(object sender, EventArgs e)
         {
+            if (missionTransferRunning)
+                return;
             if ((altmode) CMB_altmode.SelectedValue == altmode.Absolute)
             {
                 if ((int) DialogResult.No ==
@@ -1974,7 +1942,7 @@ namespace MissionPlanner.GCSViews
                 }
             }
 
-            IProgressReporterDialogue frmProgressReporter = new ProgressReporterDialogue
+            ProgressReporterDialogue frmProgressReporter = new ProgressReporterDialogue
             {
                 StartPosition = FormStartPosition.CenterScreen,
                 Text = "Sending WP's"
@@ -1986,9 +1954,7 @@ namespace MissionPlanner.GCSViews
 
             ThemeManager.ApplyThemeTo(frmProgressReporter);
 
-            frmProgressReporter.RunBackgroundOperationAsync();
-
-            frmProgressReporter.Dispose();
+            StartMissionTransfer(frmProgressReporter);
 
             MainMap.Focus();
         }
@@ -3439,24 +3405,7 @@ namespace MissionPlanner.GCSViews
 
             quickadd = false;
 
-            POI.POIModified += POI_POIModified;
-
-            if (Settings.Instance["WMSserver"] != null)
-            {
-                WMSProvider.CustomWMSURL = Settings.Instance["WMSserver"];
-                WMSProvider.szWmsLayer = Settings.Instance["WMSLayer"];
-            }
-
-            if (Settings.Instance["WMSTserver"] != null)
-            {
-                Task.Run(()=>{
-                    try {
-                    WMTSProvider.CustomWMTSURL = Settings.Instance["WMSTserver"];
-                    WMTSProvider.LayerName = WMTSProvider.Layers[int.Parse(Settings.Instance["WMSTLayer"])];
-                     this.BeginInvokeIfRequired(()=>{ MainMap.Core.ReloadMap(); });
-                    } catch (Exception ex) { log.Error(ex); }
-                });
-            }
+            // 本项目不订阅 POI 或初始化自定义地图服务。
 
             TRK_zoom.Minimum = MainMap.MapProvider.MinZoom;
             TRK_zoom.Maximum = 24;
@@ -4912,15 +4861,6 @@ namespace MissionPlanner.GCSViews
 
             e.Graphics.ResetTransform();
 
-            polyicon.Location = new Point(10, 100);
-            polyicon.Paint(e.Graphics);
-
-            e.Graphics.ResetTransform();
-
-            zoomicon.Location = new Point(10, polyicon.Location.Y + polyicon.Height + 5);
-            zoomicon.Paint(e.Graphics);
-
-            e.Graphics.ResetTransform();
         }
 
         private void MainMap_Resize(object sender, EventArgs e)
@@ -5037,7 +4977,9 @@ namespace MissionPlanner.GCSViews
             POI.POIEdit(CurrentPOIMarker);
         }
 
-        public void prefetchToolStripMenuItem_Click(object sender, EventArgs e)
+        private bool prefetchRunning;
+
+        public async void prefetchToolStripMenuItem_Click(object sender, EventArgs e)
         {
             RectLatLng area = MainMap.SelectedArea;
             if (area.IsEmpty)
@@ -5085,26 +5027,44 @@ namespace MissionPlanner.GCSViews
                     return;
                 }
 
-                for (int i = minzoom; i <= maxzoom; i++)
+                if (prefetchRunning)
+                    return;
+                prefetchRunning = true;
+                prefetchToolStripMenuItem.Enabled = false;
+                int downloadedTiles = 0;
+                int totalTiles = 0;
+                try
                 {
-                    try
-                {
-                    TilePrefetcher obj = new TilePrefetcher();
-                    ThemeManager.ApplyThemeTo(obj);
-                    obj.ShowCompleteMessage = false;
-                    obj.Start(area, i, MainMap.MapProvider, 0, 0);
-
-                    if (obj.UserAborted)
+                    for (int i = minzoom; i <= maxzoom; i++)
                     {
-                        obj.Dispose();
-                        break;
+                        using (var progress = new TilePrefetcher())
+                        {
+                            ThemeManager.ApplyThemeTo(progress);
+                            await progress.StartNonModal(area, i, MainMap.MapProvider, 20, 0);
+                            downloadedTiles += progress.CompletedTiles;
+                            totalTiles += progress.TotalTiles;
+                            lbl_status.Text = string.Format(downloadedTiles == totalTiles
+                                ? "地图预下载完成：{0}/{1} 张" : "地图预下载未完成：{0}/{1} 张",
+                                downloadedTiles, totalTiles);
+                            if (progress.UserAborted)
+                            {
+                                lbl_status.Text = string.Format("地图预下载已取消：已保存 {0}/{1} 张", downloadedTiles, totalTiles);
+                                break;
+                            }
+                            if (progress.DownloadError != null)
+                                throw progress.DownloadError;
+                        }
                     }
-
-                    obj.Dispose();
                 }
-                    catch
-                    {
-                    }
+                catch (Exception ex)
+                {
+                    log.Error("地图预下载失败", ex);
+                    lbl_status.Text = "地图预下载失败：" + ex.Message;
+                }
+                finally
+                {
+                    prefetchRunning = false;
+                    prefetchToolStripMenuItem.Enabled = true;
                 }
             }
             else
@@ -6665,23 +6625,9 @@ Column 1: Field type (RALLY is the only one at the moment -- may have RALLY_LAND
                 if (isMouseDown || CurentRectMarker != null)
                     return;
 
-                prop.alt = MainV2.comPort.MAV.cs.alt;
-                prop.altasl = MainV2.comPort.MAV.cs.altasl;
-                prop.center = MainMap.Position;
-                prop.Update(MainV2.comPort.MAV.cs.PlannedHomeLocation, MainV2.comPort.MAV.cs.Location,
-                    MainV2.comPort.MAV.cs.battery_kmleft);
-
                 // clear every 10 seconds
                 if(DateTime.Now.Second % 10 == 0)
                     routesoverlay.Markers.Clear();
-
-                if (MainV2.comPort.MAV.cs.TrackerLocation != MainV2.comPort.MAV.cs.HomeLocation &&
-                    MainV2.comPort.MAV.cs.TrackerLocation.Lng != 0)
-                {
-                    addpolygonmarker(this, "Tracker Home", MainV2.comPort.MAV.cs.TrackerLocation.Lng,
-                        MainV2.comPort.MAV.cs.TrackerLocation.Lat, (int) MainV2.comPort.MAV.cs.TrackerLocation.Alt,
-                        Color.Blue, routesoverlay);
-                }
 
                 if (MainV2.comPort.MAV.cs.lat == 0 || MainV2.comPort.MAV.cs.lng == 0)
                     return;
@@ -7008,60 +6954,12 @@ Column 1: Field type (RALLY is the only one at the moment -- may have RALLY_LAND
 
         private void updateMapType(object sender, System.Timers.ElapsedEventArgs e)
         {
-            log.Info("updateMapType invoke req? " + comboBoxMapType.InvokeRequired);
-
-            if (sender is System.Timers.Timer)
-                ((System.Timers.Timer) sender).Stop();
-
-            string mapType = Settings.Instance["MapType"];
-            if (!string.IsNullOrEmpty(mapType))
-            {
-                try
-                {
-                    var index = GMapProviders.List.FindIndex(x => (x.Name == mapType));
-
-                    if (index != -1) comboBoxMapType.SelectedIndex = index;
-                }
-                catch (Exception ex)
-                {
-                    log.Error(ex);
-                }
-            }
-            else
-            {
-                if (L10N.ConfigLang.IsChildOf(CultureInfo.GetCultureInfo("zh-Hans")))
-                {
-                    CustomMessageBox.Show(
-                        "亲爱的中国用户，为保证地图使用正常，已为您将默认地图自动切换到具有中国特色的【谷歌中国卫星地图】！\r\n与默认【谷歌卫星地图】的区别：使用.cn服务器，加入火星坐标修正\r\n如果您所在的地区仍然无法使用，天书同时推荐必应或高德地图，其它地图由于没有加入坐标修正功能，为确保飞行安全，请谨慎选择",
-                        "默认地图已被切换");
-
-                    try
-                    {
-                        var index = GMapProviders.List.FindIndex(x => (x.Name == "谷歌中国卫星地图"));
-
-                        if (index != -1) comboBoxMapType.SelectedIndex = index;
-                    }
-                    catch (Exception ex)
-                    {
-                        log.Error(ex);
-                    }
-                }
-                else
-                {
-                    mapType = "GoogleSatelliteMap";
-                    // set default
-                    try
-                    {
-                        var index = GMapProviders.List.FindIndex(x => (x.Name == mapType));
-
-                        if (index != -1) comboBoxMapType.SelectedIndex = index;
-                    }
-                    catch (Exception ex)
-                    {
-                        log.Error(ex);
-                    }
-                }
-            }
+            // 项目固定使用谷歌卫星图，不恢复旧配置中的其他底图。
+            comboBoxMapType.SelectedItem = GoogleSatelliteMapProvider.Instance;
+            MainMap.MapProvider = GoogleSatelliteMapProvider.Instance;
+            if (FlightData.mymap != null)
+                FlightData.mymap.MapProvider = GoogleSatelliteMapProvider.Instance;
+            Settings.Instance["MapType"] = "GoogleSatelliteMap";
         }
 
         private void updateRowNumbers()
@@ -7351,29 +7249,6 @@ Column 1: Field type (RALLY is the only one at the moment -- may have RALLY_LAND
             if (isMouseClickOffMenu)
             {
                 isMouseClickOffMenu = false;
-                return;
-            }
-
-            // check if the mouse up happend over our button
-            if (polyicon.Rectangle.Contains(e.Location))
-            {
-                if (e.Button == MouseButtons.Right)
-                {
-                    polyicon.IsSelected = false;
-                    clearPolygonToolStripMenuItem_Click(this, null);
-
-                    contextMenuStrip1.Visible = false;
-
-                    return;
-                }
-
-                contextMenuStripPoly.Show(MainMap, e.Location);
-                return;
-            }
-
-            if (zoomicon.Rectangle.Contains(e.Location))
-            {
-                contextMenuStripZoom.Show(MainMap, e.Location);
                 return;
             }
 
@@ -7686,19 +7561,6 @@ Column 1: Field type (RALLY is the only one at the moment -- may have RALLY_LAND
             coords1.Lat = point.Lat;
             coords1.Lng = point.Lng;
 
-            // always show on planner view
-            //if (MainV2.ShowAirports)
-            {
-                airportsoverlay.Clear();
-                foreach (var item in Airports.getAirports(MainMap.Position))
-                {
-                    airportsoverlay.Markers.Add(new GMapMarkerAirport(item)
-                    {
-                        ToolTipText = item.Tag,
-                        ToolTipMode = MarkerTooltipMode.OnMouseOver
-                    });
-                }
-            }
         }
 
         private void MainMap_OnMapTypeChanged(GMapProvider type)

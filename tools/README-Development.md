@@ -43,3 +43,11 @@ $script = (Resolve-Path '.\tools\Test-FlightDataScope.py').Path
 输出 `flightdata-scope-result.txt`（最终 `PASS` 或 `FAIL`）、`flightdata-scope-status.txt`（`0` 成功，`1` 未完成或失败）、`flightdata-scope-telemetry.csv`。未提供模拟器重启路径时，结果明确记录 `SKIP reconnect`。查看状态文件应在脚本结束后进行。脚本不终止主应用；结束后关闭专用测试实例及本次启动的模拟器，重启模拟器 PID 写入结果文件。
 
 该脚本记录实际延迟，不将本机 TCP 测量等同于低速数传或真实飞机上的性能结论。AUX 各选项作用、解锁、航点执行、日志下载/回放及 Message Interval 实际设置需要后续专项验证。
+
+## 飞行计划页验证
+
+`Test-FlightPlannerScope.py` 使用 MP 的 IronPython `-script` 入口。先启动本机固定翼 SITL（TCP 5760），设置可选的 `MP_PLANNER_OUTPUT` 输出目录，再把上述启动命令的脚本路径改成此文件。未设置时写入当前配置目录的 `planner-test`。脚本仅连接本机，并检查 SITL 参数和未解锁状态；会覆盖模拟器任务、切换 STABILIZE、临时修改 AIRSPEED_CRUISE 后恢复。
+
+检查实际菜单和底图选项、180 条含不同高度参考系的航点编辑、JSON 保存加载及 SITL 上传下载逐项比对；传输期间执行飞行数据模式按钮与参数 API 写入，记录耗时和独立 UI 定时采样；调用测距和区域预下载入口。文件往返复用按钮的序列化/导入路径，不自动操作系统文件选择窗口。参数 API 测试不代表全部参数表的点击流程。
+
+结果为 `result.txt` 的 PASS/FAIL 和 `status.txt` 的 0/1；`telemetry.csv` 记录脚本采样，`continuous.csv` 的 UI 定时采样覆盖同步参数写入区间（最后一列为 UI 定时器实际间隔，不是请求响应延迟）。脚本不退出应用，结束后关闭专用测试实例。Google 在线请求失败时会记录预下载不完整，不能据此声称地图下载成功；本地受控缓存测试另由 `PlannerPrefetchTests` 验证内存命中后落盘以及 CacheOnly 读取。TCP SITL 的时间结果不能替代低速数传测试。
