@@ -145,6 +145,10 @@ namespace GMap.NET.WindowsForms
       public Pen EmptyTileBorders = new Pen(Color.White, 1);
 #endif
 
+        // 工作台按区域集中显示缺图信息；其他地图保持原来的逐瓦片诊断。
+        public bool CompactMissingTiles { get; set; }
+        public string MissingTileStatus { get; private set; }
+
         public bool ShowCenter = true;
 
         /// <summary>
@@ -594,6 +598,7 @@ namespace GMap.NET.WindowsForms
         /// <param name="g"></param>
         void DrawMap(IGraphics g)
         {
+            MissingTileStatus = null;
             if (Core.updatingBounds || MapProvider == EmptyProvider.Instance || MapProvider == null)
             {
                 Debug.WriteLine("Core.updatingBounds");
@@ -750,6 +755,9 @@ namespace GMap.NET.WindowsForms
                                             new RectangleF(Core.tileRect.X, Core.tileRect.Y, Core.tileRect.Width,
                                                 Core.tileRect.Height));
 
+                                        if (CompactMissingTiles) MissingTileStatus = GMaps.Instance.Mode == AccessMode.CacheOnly ? "当前区域无可用地图缓存" : "地图未加载，请检查地图服务与连接";
+                                        else
+                                        {
                                         g.DrawString("Exception: " + ex.Message, MissingDataFont, Brushes.Red,
                                             new RectangleF(Core.tileRect.X + 11, Core.tileRect.Y + 11,
                                                 Core.tileRect.Width - 11, Core.tileRect.Height - 11));
@@ -757,6 +765,8 @@ namespace GMap.NET.WindowsForms
                                         g.DrawString(EmptyTileText, MissingDataFont, Brushes.Blue,
                                             new RectangleF(Core.tileRect.X, Core.tileRect.Y, Core.tileRect.Width,
                                                 Core.tileRect.Height), CenterFormat);
+
+                                        }
 
 #else
                               g.FillRectangle(EmptytileBrush, new System.Drawing.Rectangle((int) Core.tileRect.X, (int) Core.tileRect.Y, (int) Core.tileRect.Width, (int) Core.tileRect.Height));
@@ -1624,7 +1634,7 @@ namespace GMap.NET.WindowsForms
 #if PocketPC
          g.DrawString("debug build", CopyrightFont, CopyrightBrush, 2, CopyrightFont.Size);
 #else
-            g.DrawString("debug build", CopyrightFont, Brushes.Blue, 2, CopyrightFont.Height);
+            if (!CompactMissingTiles) g.DrawString("debug build", CopyrightFont, Brushes.Blue, 2, CopyrightFont.Height);
 #endif
 
 #endif

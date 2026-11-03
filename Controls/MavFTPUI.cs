@@ -20,6 +20,27 @@ namespace MissionPlanner.Controls
 
         private MAVLinkInterface _mav;
         private MAVFtp _mavftp;
+        private readonly CancellationTokenSource projectLifetime = new CancellationTokenSource();
+        private bool projectRetired;
+
+        public void ConfigureProjectWorkspace()
+        {
+            splitContainer1.Orientation = Orientation.Horizontal;
+            splitContainer1.SplitterDistance = 160;
+        }
+
+        public async void RetireProjectClient()
+        {
+            if (projectRetired) return;
+            projectRetired = true;
+            projectLifetime.Cancel();
+            Enabled = false;
+            treeView1.Nodes.Clear(); listView1.Items.Clear();
+            // 等原串行操作离开后再销毁控件，切普通标签不会进入此分支。
+            await ftpOperation.WaitAsync();
+            try { Dispose(); }
+            finally { ftpOperation.Release(); }
+        }
 
         public MavFTPUI() : this(MainV2.comPort)
         {
@@ -34,7 +55,7 @@ namespace MissionPlanner.Controls
             {
                 try
                 {
-                    if (this.IsDisposed)
+                    if (this.IsDisposed || projectRetired)
                     {
                         // 切页后后台传输仍使用此客户端，不能清空。
                         return;
@@ -75,9 +96,10 @@ namespace MissionPlanner.Controls
         {
             // 只锁文件页；切到飞行数据后仍可控制。新文件页等旧传输结束再列目录。
             await ftpOperation.WaitAsync();
+            if (projectRetired || IsDisposed) { ftpOperation.Release(); progress.Dispose(); return; }
             var completion = new TaskCompletionSource<bool>();
 
-            if (!IsDisposed) Enabled = false;
+            if (!IsDisposed && !projectRetired) Enabled = false;
             progress.FormClosed += (sender, args) => completion.TrySetResult(true);
             try
             {
@@ -89,7 +111,7 @@ namespace MissionPlanner.Controls
                 completion.TrySetResult(true);
                 ftpOperation.Release();
                 progress.Dispose();
-                if (!IsDisposed) Enabled = true;
+                if (!IsDisposed && !projectRetired) Enabled = true;
             }
         }
 
@@ -98,12 +120,12 @@ namespace MissionPlanner.Controls
             await ftpOperation.WaitAsync();
             try
             {
-                if (!IsDisposed) await PopulateTreeViewCore();
+                if (!IsDisposed && !projectRetired) await PopulateTreeViewCore();
             }
             catch (Exception ex)
             {
                 log.Error(ex);
-                if (!IsDisposed) toolStripStatusLabel1.Text = "读取目录失败：" + ex.Message;
+                if (!IsDisposed && !projectRetired) toolStripStatusLabel1.Text = "读取目录失败：" + ex.Message;
             }
             finally { ftpOperation.Release(); }
         }
@@ -121,7 +143,7 @@ namespace MissionPlanner.Controls
 
             TreeNode rootNode = null;
 
-            DirectoryInfo info = new DirectoryInfo(@"/", _mavftp);
+            DirectoryInfo info = new DirectoryInfo(@"/", _mavftp, projectLifetime);
             if (info.Exists)
             {
                 rootNode = new TreeNode(info.Name, 0, 0);
@@ -139,7 +161,7 @@ namespace MissionPlanner.Controls
                 treeView1.Nodes.Add(rootNode);
             }
             */
-            info = new DirectoryInfo(@"@SYS/", _mavftp);
+            info = new DirectoryInfo(@"@SYS/", _mavftp, projectLifetime);
             if (info.Exists)
             {
                 rootNode = new TreeNode("@SYS", 0, 0);
@@ -149,7 +171,7 @@ namespace MissionPlanner.Controls
             }
             
 
-            if (IsDisposed) return;
+            if (IsDisposed || projectRetired) return;
             toolStripStatusLabel1.Text = "Ready";
 
             treeView1.Enabled = true;
@@ -183,12 +205,12 @@ namespace MissionPlanner.Controls
             await ftpOperation.WaitAsync();
             try
             {
-                if (!IsDisposed) await ReadDirectory(e);
+                if (!IsDisposed && !projectRetired) await ReadDirectory(e);
             }
             catch (Exception ex)
             {
                 log.Error(ex);
-                if (!IsDisposed) toolStripStatusLabel1.Text = "读取目录失败：" + ex.Message;
+                if (!IsDisposed && !projectRetired) toolStripStatusLabel1.Text = "读取目录失败：" + ex.Message;
             }
             finally { ftpOperation.Release(); }
         }
@@ -250,10 +272,12 @@ namespace MissionPlanner.Controls
         {
             private readonly MAVFtp _mavftp;
             private List<MAVFtp.FtpFileInfo> cache;
+            private readonly CancellationTokenSource lifetime;
 
-            public DirectoryInfo(string dir, MAVFtp mavftp)
+            public DirectoryInfo(string dir, MAVFtp mavftp, CancellationTokenSource cancellation = null)
             {
                 _mavftp = mavftp;
+                lifetime = cancellation ?? new CancellationTokenSource();
                 FullPath = dir;
             }
 
@@ -268,7 +292,7 @@ namespace MissionPlanner.Controls
 
             public override void Delete()
             {
-                _mavftp.kCmdRemoveDirectory(FullPath, new CancellationTokenSource());
+                _mavftp.kCmdRemoveDirectory(FullPath, lifetime);
             }
 
             public async Task<DirectoryInfo[]> GetDirectories()
@@ -280,11 +304,11 @@ namespace MissionPlanner.Controls
                     {
                         lock (_mavftp)
                         {
-                            cache = _mavftp.kCmdListDirectory(FullPath, new CancellationTokenSource());
+                            cache = _mavftp.kCmdListDirectory(FullPath, lifetime);
                         }
                     }).ConfigureAwait(true);
                     return cache.Where(a => a.isDirectory && a.Name != "." && a.Name != "..")
-                        .Select(a => new DirectoryInfo(a.FullName, _mavftp)).ToArray();
+                        .Select(a => new DirectoryInfo(a.FullName, _mavftp, lifetime)).ToArray();
 
                 }
                 catch (Exception e)
@@ -331,7 +355,7 @@ namespace MissionPlanner.Controls
                 }
             }
 
-            if (IsDisposed) return;
+            if (IsDisposed || projectRetired) return;
             TreeView1_NodeMouseClick(null,
                 new TreeNodeMouseClickEventArgs(treeView1.SelectedNode, MouseButtons.Left, 1, 1, 1));
         }
@@ -373,7 +397,7 @@ namespace MissionPlanner.Controls
                 {
                     var path = treeView1.SelectedNode.FullPath + "/" + listView1SelectedItem.Text;
                     ProgressReporterDialogue prd = new ProgressReporterDialogue();
-                    CancellationTokenSource cancel = new CancellationTokenSource();
+                    CancellationTokenSource cancel = CancellationTokenSource.CreateLinkedTokenSource(projectLifetime.Token);
                     prd.doWorkArgs.CancelRequestChanged += (o, args) =>
                     {
                         prd.doWorkArgs.ErrorMessage = "User Cancel";
@@ -389,6 +413,7 @@ namespace MissionPlanner.Controls
 
                     prd.DoWork += (iprd) =>
                     {
+                        if (cancel.IsCancellationRequested) { iprd.doWorkArgs.CancelAcknowledged = true; return; }
                         var ms = _mavftp.GetFile(path, cancel, false);
                         if (cancel.IsCancellationRequested)
                         {
@@ -407,7 +432,7 @@ namespace MissionPlanner.Controls
                     };
                     await RunTransferAsync(prd);
                     _mavftp.Progress -= progress;
-                    if (IsDisposed) return;
+                    if (IsDisposed || projectRetired) return;
                 }
                 else if (dr == DialogResult.Cancel)
                 {
@@ -415,7 +440,7 @@ namespace MissionPlanner.Controls
                 }
             }
 
-            if (IsDisposed) return;
+            if (IsDisposed || projectRetired) return;
             toolStripStatusLabel1.Text = "Ready";
         }
 
@@ -431,7 +456,7 @@ namespace MissionPlanner.Controls
                     try
                     {
                         await UploadFile(ofdFileName).ConfigureAwait(true);
-                        if (IsDisposed) return;
+                        if (IsDisposed || projectRetired) return;
                     }
                     catch (Exception exception)
                     {
@@ -441,7 +466,7 @@ namespace MissionPlanner.Controls
                 }
             }
 
-            if (IsDisposed) return;
+            if (IsDisposed || projectRetired) return;
             TreeView1_NodeMouseClick(null,
                 new TreeNodeMouseClickEventArgs(treeView1.SelectedNode, MouseButtons.Left, 1, 1, 1));
         }
@@ -451,7 +476,7 @@ namespace MissionPlanner.Controls
             toolStripStatusLabel1.Text = "Upload " + Path.GetFileName(ofdFileName);
             var fn = treeView1.SelectedNode.FullPath + "/" + Path.GetFileName(ofdFileName);
             ProgressReporterDialogue prd = new ProgressReporterDialogue();
-            CancellationTokenSource cancel = new CancellationTokenSource();
+            CancellationTokenSource cancel = CancellationTokenSource.CreateLinkedTokenSource(projectLifetime.Token);
             prd.doWorkArgs.CancelRequestChanged += (o, args) =>
             {
                 prd.doWorkArgs.ErrorMessage = "User Cancel";
@@ -468,6 +493,7 @@ namespace MissionPlanner.Controls
 
             prd.DoWork += (iprd) =>
             {
+                if (cancel.IsCancellationRequested) { iprd.doWorkArgs.CancelAcknowledged = true; return; }
                 _mavftp.UploadFile(fn, ofdFileName, cancel);
                 if (cancel.IsCancellationRequested)
                 {
@@ -487,7 +513,7 @@ namespace MissionPlanner.Controls
             };
             await RunTransferAsync(prd);
             _mavftp.Progress -= progress;
-            if (IsDisposed) return;
+            if (IsDisposed || projectRetired) return;
             toolStripStatusLabel1.Text = "Ready";
         }
 
@@ -497,7 +523,7 @@ namespace MissionPlanner.Controls
             {
                 toolStripStatusLabel1.Text = "Delete " + listView1SelectedItem.Text;
                 ProgressReporterDialogue prd = new ProgressReporterDialogue();
-                CancellationTokenSource cancel = new CancellationTokenSource();
+                CancellationTokenSource cancel = CancellationTokenSource.CreateLinkedTokenSource(projectLifetime.Token);
                 prd.doWorkArgs.CancelRequestChanged += (o, args) =>
                 {
                     prd.doWorkArgs.ErrorMessage = "User Cancel";
@@ -518,10 +544,10 @@ namespace MissionPlanner.Controls
                 await RunTransferAsync(prd);
             }
 
-            if (IsDisposed) return;
+            if (IsDisposed || projectRetired) return;
             TreeView1_NodeMouseClick(null,
                 new TreeNodeMouseClickEventArgs(treeView1.SelectedNode, MouseButtons.Left, 1, 1, 1));
-            if (IsDisposed) return;
+            if (IsDisposed || projectRetired) return;
             toolStripStatusLabel1.Text = "Ready";
         }
 
@@ -535,7 +561,7 @@ namespace MissionPlanner.Controls
             if (e.Label == null)
                 return;
             ProgressReporterDialogue prd = new ProgressReporterDialogue();
-            CancellationTokenSource cancel = new CancellationTokenSource();
+            CancellationTokenSource cancel = CancellationTokenSource.CreateLinkedTokenSource(projectLifetime.Token);
             prd.doWorkArgs.CancelRequestChanged += (o, args) =>
             {
                 prd.doWorkArgs.ErrorMessage = "User Cancel";
@@ -547,16 +573,17 @@ namespace MissionPlanner.Controls
             var text = listView1.SelectedItems[0].Text;
             string label = e.Label;
             prd.DoWork += (iprd) =>
-            {               
+            {
+                if (cancel.IsCancellationRequested) { iprd.doWorkArgs.CancelAcknowledged = true; return; }
                 _mavftp.kCmdRename(selectedNodeFullPath + "/" + text,
                     selectedNodeFullPath + "/" + label, cancel);
             };
 
             await RunTransferAsync(prd);
-            if (IsDisposed) return;
+            if (IsDisposed || projectRetired) return;
             TreeView1_NodeMouseClick(null,
                 new TreeNodeMouseClickEventArgs(treeView1.SelectedNode, MouseButtons.Left, 1, 1, 1));
-            if (IsDisposed) return;
+            if (IsDisposed || projectRetired) return;
             toolStripStatusLabel1.Text = "Ready";
         }
 
@@ -567,7 +594,7 @@ namespace MissionPlanner.Controls
             if (dr == DialogResult.OK)
             {
                 ProgressReporterDialogue prd = new ProgressReporterDialogue();
-                CancellationTokenSource cancel = new CancellationTokenSource();
+                CancellationTokenSource cancel = CancellationTokenSource.CreateLinkedTokenSource(projectLifetime.Token);
                 prd.doWorkArgs.CancelRequestChanged += (o, args) =>
                 {
                     prd.doWorkArgs.ErrorMessage = "User Cancel";
@@ -588,17 +615,17 @@ namespace MissionPlanner.Controls
                 await RunTransferAsync(prd);
             }
 
-            if (IsDisposed) return;
+            if (IsDisposed || projectRetired) return;
             TreeView1_NodeMouseClick(null,
                 new TreeNodeMouseClickEventArgs(treeView1.SelectedNode, MouseButtons.Left, 1, 1, 1));
-            if (IsDisposed) return;
+            if (IsDisposed || projectRetired) return;
             toolStripStatusLabel1.Text = "Ready";
         }
 
         private async void GetCRC32ToolStripMenuItem_Click(object sender, EventArgs e)
         {
             ProgressReporterDialogue prd = new ProgressReporterDialogue();
-            CancellationTokenSource cancel = new CancellationTokenSource();
+            CancellationTokenSource cancel = CancellationTokenSource.CreateLinkedTokenSource(projectLifetime.Token);
             prd.doWorkArgs.CancelRequestChanged += (o, args) =>
             {
                 prd.doWorkArgs.ErrorMessage = "User Cancel";
@@ -611,6 +638,7 @@ namespace MissionPlanner.Controls
             string text = listView1.SelectedItems[0].Text;
             prd.DoWork += (iprd) =>
             {
+                if (cancel.IsCancellationRequested) { iprd.doWorkArgs.CancelAcknowledged = true; return; }
 
                 _mavftp.kCmdCalcFileCRC32(fullPath + "/" + text,
                     ref crc, cancel);
@@ -646,7 +674,7 @@ namespace MissionPlanner.Controls
                     {
                         treeView1.SelectedNode = node;
 
-                        if (IsDisposed) return;
+                        if (IsDisposed || projectRetired) return;
                         TreeView1_NodeMouseClick(null,
                             new TreeNodeMouseClickEventArgs(treeView1.SelectedNode, MouseButtons.Left, 1, 1, 1));
                         break;
@@ -668,7 +696,7 @@ namespace MissionPlanner.Controls
                     toolStripStatusLabel1.Text = "Download " + listView1SelectedItem.Text;
                     var path = treeView1.SelectedNode.FullPath + "/" + listView1SelectedItem.Text;
                     ProgressReporterDialogue prd = new ProgressReporterDialogue();
-                    CancellationTokenSource cancel = new CancellationTokenSource();
+                    CancellationTokenSource cancel = CancellationTokenSource.CreateLinkedTokenSource(projectLifetime.Token);
                     prd.doWorkArgs.CancelRequestChanged += (o, args) =>
                     {
                         prd.doWorkArgs.ErrorMessage = "User Cancel";
@@ -685,6 +713,7 @@ namespace MissionPlanner.Controls
 
                     prd.DoWork += (iprd) =>
                     {
+                        if (cancel.IsCancellationRequested) { iprd.doWorkArgs.CancelAcknowledged = true; return; }
                         var ms = _mavftp.GetFile(path, cancel);
                         if (cancel.IsCancellationRequested)
                         {
@@ -703,7 +732,7 @@ namespace MissionPlanner.Controls
                     };
                     await RunTransferAsync(prd);
                     _mavftp.Progress -= progress;
-                    if (IsDisposed) return;
+                    if (IsDisposed || projectRetired) return;
                 }
                 else if (dr == DialogResult.Cancel)
                 {
@@ -711,7 +740,7 @@ namespace MissionPlanner.Controls
                 }
             }
 
-            if (IsDisposed) return;
+            if (IsDisposed || projectRetired) return;
             toolStripStatusLabel1.Text = "Ready";
         }
 

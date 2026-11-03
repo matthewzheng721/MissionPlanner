@@ -101,13 +101,13 @@ namespace MissionPlanner.Controls
             {
                 if (Vertical)
                 {
-                    e.Graphics.DrawString(Lat.ToString("0.0000000") + "\n" + Lng.ToString("0.0000000") + "\n" + Alt.ToString("0.00") + AltUnit, this.Font, new SolidBrush(this.ForeColor), text, StringFormat.GenericDefault);
+                    e.Graphics.DrawString(Lat.ToString("0.0000000") + "\n" + Lng.ToString("0.0000000") + "\n" + ProjectAltitudeDisplay, this.Font, new SolidBrush(this.ForeColor), text, StringFormat.GenericDefault);
                     e.Graphics.DrawString(AltSource, this.Font, new SolidBrush(this.ForeColor),
                         new PointF(CMB_coordsystem.Left, CMB_coordsystem.Bottom + 4), StringFormat.GenericDefault);
                 }
                 else
                 {
-                    e.Graphics.DrawString(Lat.ToString("0.0000000") + " " + Lng.ToString("0.0000000") + "   " + Alt.ToString("0.00") + AltUnit, this.Font, new SolidBrush(this.ForeColor), text, StringFormat.GenericDefault);
+                    e.Graphics.DrawString(Lat.ToString("0.0000000") + " " + Lng.ToString("0.0000000") + "   " + ProjectAltitudeDisplay, this.Font, new SolidBrush(this.ForeColor), text, StringFormat.GenericDefault);
                 }
             } 
             else  if (System == CoordsSystems.UTM.ToString())
@@ -123,13 +123,13 @@ namespace MissionPlanner.Controls
 
                     if (Vertical)
                     {
-                        e.Graphics.DrawString(parts[0] + "\n" + parts[1] + "\n" + parts[2] + "\n" + Alt.ToString("0.00") + AltUnit, this.Font, new SolidBrush(this.ForeColor), text, StringFormat.GenericDefault);
+                        e.Graphics.DrawString(parts[0] + "\n" + parts[1] + "\n" + parts[2] + "\n" + ProjectAltitudeDisplay, this.Font, new SolidBrush(this.ForeColor), text, StringFormat.GenericDefault);
                         e.Graphics.DrawString(AltSource, this.Font, new SolidBrush(this.ForeColor),
                         new PointF(CMB_coordsystem.Left, CMB_coordsystem.Bottom + 4), StringFormat.GenericDefault);
                     }
                     else
                     {
-                        e.Graphics.DrawString(utm.ToString() + "   " + Alt.ToString("0.00") + AltUnit, this.Font, new SolidBrush(this.ForeColor), text, StringFormat.GenericDefault);
+                        e.Graphics.DrawString(utm.ToString() + "   " + ProjectAltitudeDisplay, this.Font, new SolidBrush(this.ForeColor), text, StringFormat.GenericDefault);
                     }
                 }
                 catch { }
@@ -146,13 +146,13 @@ namespace MissionPlanner.Controls
 
                     if (Vertical)
                     {
-                        e.Graphics.DrawString(mgrs.ToString() + "\n" + Alt.ToString("0.00") + AltUnit, this.Font, new SolidBrush(this.ForeColor), new Point(5, CMB_coordsystem.Bottom + 2), StringFormat.GenericDefault);
+                        e.Graphics.DrawString(mgrs.ToString() + "\n" + ProjectAltitudeDisplay, this.Font, new SolidBrush(this.ForeColor), new Point(5, CMB_coordsystem.Bottom + 2), StringFormat.GenericDefault);
                         e.Graphics.DrawString(AltSource, this.Font, new SolidBrush(this.ForeColor),
                         new PointF(CMB_coordsystem.Right + 4, CMB_coordsystem.Top), StringFormat.GenericDefault);
                     }
                     else
                     {
-                        e.Graphics.DrawString(mgrs.ToString() + "   " + Alt.ToString("0.00") + AltUnit, this.Font, new SolidBrush(this.ForeColor), text, StringFormat.GenericDefault);
+                        e.Graphics.DrawString(mgrs.ToString() + "   " + ProjectAltitudeDisplay, this.Font, new SolidBrush(this.ForeColor), text, StringFormat.GenericDefault);
                     }
                 }
                 catch { }

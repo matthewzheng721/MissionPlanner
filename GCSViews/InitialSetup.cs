@@ -156,9 +156,8 @@ namespace MissionPlanner.GCSViews
         {
             ResourceManager rm = new ResourceManager(this.GetType());
 
-            // 五个入口始终可见；未就绪时不构造依赖飞控参数的页面。
+            // 保留已确认的配置入口；未就绪时不构造依赖飞控参数的页面。
             bool ready = isConnected && gotAllParams && MainV2.comPort.MAV.param.TotalReceived > 0;
-            AddBackstageViewPage(isConnected ? typeof(ConfigFirmwareDisabled) : typeof(ConfigFirmwareManifest), "本地固件安装");
             AddBackstageViewPage(ready ? typeof(ConfigAccelerometerCalibration) : typeof(InitialSetupUnavailable), "校准水平");
             AddBackstageViewPage(ready ? typeof(ConfigHWCompass2) : typeof(InitialSetupUnavailable), "大飞机罗盘校准");
             AddBackstageViewPage(ready ? typeof(ConfigProjectMotor) : typeof(InitialSetupUnavailable), "电机启动与恢复");

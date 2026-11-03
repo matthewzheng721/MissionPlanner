@@ -63,6 +63,10 @@ namespace MissionPlanner.Controls
         //We use this property as a backup store for the numberColor, so it is possible to change numberColor temporary.
         public Color numberColorBackup { get; set; }
 
+        // 新工作台的小格布局保留字段和绑定，仅限制数字尺寸避免覆盖字段名。
+        public bool CompactDisplay { get; set; }
+        public bool DataUnavailable { get; set; }
+
         public QuickView()
         {
             InitializeComponent();
@@ -72,6 +76,11 @@ namespace MissionPlanner.Controls
 
         private void OnPaintSurface(object sender, SKPaintSurfaceEventArgs e2)
         {
+            if (ProjectTelemetryStyle)
+            {
+                DrawProjectTelemetry(e2.Surface.Canvas, e2.Info.Width, e2.Info.Height);
+                return;
+            }
             var e = new SkiaGraphics(e2.Surface);
             e2.Surface.Canvas.Clear();
             int y = 0;
@@ -82,11 +91,11 @@ namespace MissionPlanner.Controls
 
                 e.DrawString(desc, this.Font, new SolidBrush(this.ForeColor), this.Width / 2 - mid, 5);
 
-                y = extent.Height;
+                y = extent.Height + (CompactDisplay ? 8 : 0);
             }
             //
             {
-                var numb = number.ToString(numberformat);
+                var numb = DataUnavailable ? "—" : number.ToString(numberformat);
 
                 Size extent = e.MeasureString("0".PadLeft(numb.Length+1,'0'), new Font(this.Font.FontFamily, (float)newSize, this.Font.Style)).ToSize();
 
@@ -101,6 +110,7 @@ namespace MissionPlanner.Controls
                 if (newSize < 8 || newSize > 999999)
                     newSize = 8;
 
+                if (CompactDisplay) newSize = Math.Max(8, Math.Min(30, Math.Min(newSize, (Height - y - 5) * .65f)));
                 extent = e.MeasureString(numb, new Font(this.Font.FontFamily, (float)newSize, this.Font.Style)).ToSize();
 
                 e.DrawString(numb, new Font(this.Font.FontFamily, (float)newSize, this.Font.Style), new SolidBrush(this.numberColor), this.Width / 2 - extent.Width / 2, y + ((this.Height - y) / 2 - extent.Height / 2));

@@ -1,4 +1,4 @@
-#if !LIB
+﻿#if !LIB
 extern alias Drawing;
 #endif
 
@@ -699,6 +699,11 @@ namespace MissionPlanner
 
             InitializeComponent();
             ConfigureProjectMenu();
+            Shown += (s, e) => ApplyProjectAppearance();
+            MinimumSize = new Size(1100, 700);
+            JoystickBase.ArmConfirmation = arm => InvokeRequired
+                ? (bool)Invoke(new Func<bool>(() => ProjectPreflight.ConfirmArm(this, arm)))
+                : ProjectPreflight.ConfirmArm(this, arm);
 
             //Init Theme table and load BurntKermit as a default
             ThemeManager.thmColor = new ThemeColorTable(); //Init colortable
@@ -790,7 +795,7 @@ namespace MissionPlanner
 
             if (splash != null)
             {
-                this.Text = splash?.Text;
+                this.Text = "单机地面站 · V17-A 开发版";
                 titlebar = splash?.Text;
             }
 
@@ -1173,6 +1178,7 @@ namespace MissionPlanner
             MenuConfigTune.ForeColor = ThemeManager.TextColor;
             MenuConnect.ForeColor = ThemeManager.TextColor;
             MenuHelp.ForeColor = ThemeManager.TextColor;
+            if (projectBrand != null) ApplyProjectAppearance();
         }
 
         void adsb_UpdatePlanePosition(object sender, MissionPlanner.Utilities.adsb.PointLatLngAltHdg adsb)
@@ -1294,7 +1300,8 @@ namespace MissionPlanner
 
         private void MenuFlightPlanner_Click(object sender, EventArgs e)
         {
-            MyView.ShowScreen("FlightPlanner");
+            MyView.ShowScreen("FlightData");
+            FlightData.SelectProjectMission();
 
             // save config
             SaveConfig();
@@ -1304,7 +1311,8 @@ namespace MissionPlanner
         {
             if (Settings.Instance.GetBoolean("password_protect") == false)
             {
-                MyView.ShowScreen("HWConfig");
+                MyView.ShowScreen("FlightData");
+                FlightData.SelectProjectTools();
             }
             else
             {
@@ -1322,7 +1330,8 @@ namespace MissionPlanner
 
                 if (Password.VerifyPassword(pw))
                 {
-                    MyView.ShowScreen("HWConfig");
+                    MyView.ShowScreen("FlightData");
+                FlightData.SelectProjectTools();
                 }
             }
         }
@@ -1332,31 +1341,20 @@ namespace MissionPlanner
             MyView.ShowScreen("Simulation");
         }
 
+        public bool AuthorizeProjectConfiguration()
+        {
+            if (!Settings.Instance.GetBoolean("password_protect")) return true;
+            var password = "";
+            if (InputBox.Show("Enter Password", "Please enter your password", ref password, true) != DialogResult.OK) return false;
+            if (Password.VerifyPassword(password)) return true;
+            CustomMessageBox.Show("Bad Password", "Bad Password");
+            return false;
+        }
+
         private void MenuTuning_Click(object sender, EventArgs e)
         {
-            if (Settings.Instance.GetBoolean("password_protect") == false)
-            {
-                MyView.ShowScreen("SWConfig");
-            }
-            else
-            {
-                var pw = "";
-                if (InputBox.Show("Enter Password", "Please enter your password", ref pw, true) ==
-                    System.Windows.Forms.DialogResult.OK)
-                {
-                    bool ans = Password.ValidatePassword(pw);
-
-                    if (ans == false)
-                    {
-                        CustomMessageBox.Show("Bad Password", "Bad Password");
-                    }
-                }
-
-                if (Password.VerifyPassword(pw))
-                {
-                    MyView.ShowScreen("SWConfig");
-                }
-            }
+            MyView.ShowScreen("FlightData");
+            FlightData.SelectProjectSettings();
         }
 
         private void MenuTerminal_Click(object sender, EventArgs e)
@@ -1397,9 +1395,15 @@ namespace MissionPlanner
             if (MyView.current != null)
             {
                 if (MyView.current.Name == "HWConfig")
-                    MyView.ShowScreen("HWConfig");
+                {
+                    MyView.ShowScreen("FlightData");
+                    FlightData.SelectProjectTools();
+                }
                 if (MyView.current.Name == "SWConfig")
-                    MyView.ShowScreen("SWConfig");
+                {
+                    MyView.ShowScreen("FlightData");
+                    FlightData.SelectProjectSettings();
+                }
             }
 
             try
@@ -1714,15 +1718,21 @@ namespace MissionPlanner
                     Settings.Instance[_connectionControl.CMB_serialport.Text.Replace(" ","_") + "_BAUD"] =
                         _connectionControl.CMB_baudrate.Text;
 
-                    this.Text = titlebar + " " + comPort.MAV.VersionString + " on " + comPort.MAV.SerialString;
+                    this.Text = "单机地面站 · V17-A 开发版";
 
                     // refresh config window if needed
                     if (MyView.current != null && showui)
                     {
                         if (MyView.current.Name == "HWConfig")
-                            MyView.ShowScreen("HWConfig");
+                        {
+                            MyView.ShowScreen("FlightData");
+                            FlightData.SelectProjectTools();
+                        }
                         if (MyView.current.Name == "SWConfig")
-                            MyView.ShowScreen("SWConfig");
+                        {
+                            MyView.ShowScreen("FlightData");
+                            FlightData.SelectProjectSettings();
+                        }
                     }
 
                     // load wps on connect option.
@@ -2969,9 +2979,15 @@ namespace MissionPlanner
                                             this.BeginInvoke((MethodInvoker) delegate()
                                             {
                                                 if (MyView.current.Name == "HWConfig")
-                                                    MyView.ShowScreen("HWConfig");
+                                                {
+                                                    MyView.ShowScreen("FlightData");
+                                                    FlightData.SelectProjectTools();
+                                                }
                                                 if (MyView.current.Name == "SWConfig")
-                                                    MyView.ShowScreen("SWConfig");
+                                                {
+                                                    MyView.ShowScreen("FlightData");
+                                                    FlightData.SelectProjectSettings();
+                                                }
                                             });
                                         }
                                     }
@@ -3153,9 +3169,6 @@ namespace MissionPlanner
             }
 
             MyView.AddScreen(new MainSwitcher.Screen("FlightData", FlightData, true));
-            MyView.AddScreen(new MainSwitcher.Screen("FlightPlanner", FlightPlanner, true));
-            MyView.AddScreen(new MainSwitcher.Screen("HWConfig", typeof(GCSViews.InitialSetup), false));
-            MyView.AddScreen(new MainSwitcher.Screen("SWConfig", typeof(GCSViews.SoftwareConfig), false));
 
 
 
@@ -3636,7 +3649,7 @@ namespace MissionPlanner
 
                 if (cmds.ContainsKey("rtk"))
                 {
-                    var inject = new ConfigSerialInjectGPS();
+                    var inject = FlightData.GetProjectRtk();
                     if (cmds["rtk"].ToLower().Contains("http"))
                     {
                         inject.CMB_serialport.Text = "NTRIP";
@@ -3682,6 +3695,9 @@ namespace MissionPlanner
             Enum.TryParse(inactiveDisplayStyleStr, out inactiveDisplayStyle);
             GMapMarkerBase.InactiveDisplayStyle = inactiveDisplayStyle;
             Settings.Instance["GMapMarkerBase_InactiveDisplayStyle"] = inactiveDisplayStyle.ToString();
+
+            // 原 OnLoad 自定义加载流程结束后显式应用，隐藏启动也不得依赖 Shown 事件。
+            ApplyProjectAppearance();
         }
 
         private void BGLogMessagesMetaData(object nothing)
@@ -3888,21 +3904,22 @@ namespace MissionPlanner
 
         private void ConfigureProjectMenu()
         {
+            MainMenu.Items.Remove(MenuFlightData);
+            MainMenu.Items.Remove(MenuFlightPlanner);
+            MainMenu.Items.Remove(MenuInitConfig);
+            MainMenu.Items.Remove(MenuConfigTune);
             MainMenu.Items.Remove(MenuSimulation);
             MainMenu.Items.Remove(MenuHelp);
             MainMenu.Items.Remove(MenuArduPilot);
-            var tools = new ToolStripDropDownButton("工具") { Name = "ProjectTools" };
-            tools.DropDownItems.Add("MAVLink Inspector", null, (sender, args) =>
-            {
-                var inspector = new MAVLinkInspector(comPort);
-                ThemeManager.ApplyThemeTo(inspector);
-                inspector.Show(this);
-            });
-            tools.DropDownItems.Add("Message Interval", null,
-                (sender, args) => temp.ShowMessageInterval(this));
-            MainMenu.Items.Insert(4, tools);
             parameterRefreshStatus.Name = "ParameterRefreshStatus";
             MainMenu.Items.Add(parameterRefreshStatus);
+        }
+
+        public void ShowProjectMavlinkInspector()
+        {
+            var inspector = new MAVLinkInspector(comPort);
+            ThemeManager.ApplyThemeTo(inspector); ProjectWorkspaceStyle.Apply(inspector);
+            inspector.Show(this);
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -3937,7 +3954,9 @@ namespace MissionPlanner
                 if (!IsDisposed)
                 {
                     parameterRefreshStatus.Text = "参数读取完成";
-                    MyView.ShowScreen(MyView.current.Name);
+                    FlightData.RefreshProjectWorkspaceParameters();
+                    // 常驻工作台已单独刷新参数；重挂会再次触发 ParentChanged 和清表。
+                    if (MyView.current.Name != "FlightData") MyView.ShowScreen(MyView.current.Name);
                 }
             }
             catch (Exception ex)
@@ -4329,7 +4348,19 @@ namespace MissionPlanner
                     if (child is Form)
                     {
                         log.Debug("ApplyThemeTo " + child.Name);
-                        ThemeManager.ApplyThemeTo(child);
+                        if (!projectActivationTheme)
+                        {
+                            projectActivationTheme = true;
+                            try
+                            {
+                                var form = (Form)child;
+                                if (ReferenceEquals(form, this)) ApplyProjectAppearance();
+                                else if (form.Name.StartsWith("Project", StringComparison.Ordinal) || ReferenceEquals(form.Owner, this) || form is ProjectPreflightWizard || form is ParamCompare)
+                                    ProjectWorkspaceStyle.Apply(form);
+                                else ThemeManager.ApplyThemeTo(form);
+                            }
+                            finally { projectActivationTheme = false; }
+                        }
                     }
 
                     break;

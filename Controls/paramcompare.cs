@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace MissionPlanner.Controls
@@ -10,6 +11,8 @@ namespace MissionPlanner.Controls
         public delegate void dtlvcallbackHandler(string param, double value);
 
         public event dtlvcallbackHandler dtlvcallback;
+        // 非模态调用方可在目标变化后拒绝回填旧窗口。
+        public Func<bool> CanApplyChanges { get; set; }
 
         DataGridView dgv;
         Dictionary<string, double> param = new Dictionary<string, double>();
@@ -59,11 +62,26 @@ namespace MissionPlanner.Controls
                 }
                 ; //if (Params.RowCount > 1) { Params.Rows.RemoveAt(Params.RowCount - 1); } }
             }
+            // 与日常参数表一致，收藏参数优先；仍保留原有四列。
+            var favorites = MissionPlanner.Utilities.Settings.Instance.GetList("fav_params");
+            Params.SortCompare += (sender, args) =>
+            {
+                var first = Convert.ToString(Params.Rows[args.RowIndex1].Cells[Command.Index].Value);
+                var second = Convert.ToString(Params.Rows[args.RowIndex2].Cells[Command.Index].Value);
+                var preferred = favorites.Contains(second).CompareTo(favorites.Contains(first));
+                args.SortResult = preferred != 0 ? preferred : StringComparer.OrdinalIgnoreCase.Compare(first, second);
+                args.Handled = true;
+            };
             Params.Sort(Params.Columns[0], ListSortDirection.Ascending);
         }
 
         private void BUT_save_Click(object sender, EventArgs e)
         {
+            if (CanApplyChanges != null && !CanApplyChanges())
+            {
+                Close();
+                return;
+            }
             if (dgv == null)
             {
                 try

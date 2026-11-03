@@ -13,9 +13,11 @@
         /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
         protected override void Dispose(bool disposing)
         {
-            if (disposing && (components != null))
+            if (disposing)
             {
-                components.Dispose();
+                // 线程池计时器不属于 components，必须在窗口句柄释放前单独终止。
+                StopHideTimer();
+                if (components != null) components.Dispose();
             }
             base.Dispose(disposing);
         }

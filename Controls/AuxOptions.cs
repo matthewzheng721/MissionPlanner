@@ -1,6 +1,7 @@
 ﻿using MissionPlanner.Utilities;
 using System;
 using System.Drawing;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace MissionPlanner.Controls
@@ -9,6 +10,8 @@ namespace MissionPlanner.Controls
     {
         static int index = 0;
         public int thisaux;
+        private bool commandPending;
+        private readonly Timer projectCheckTimer;
         protected override void OnVisibleChanged(EventArgs e)
         {
             base.OnVisibleChanged(e);
@@ -42,13 +45,19 @@ namespace MissionPlanner.Controls
 
         private void MavlinkComboBox1_SelectedValueChanged(object sender, EventArgs e)
         {
-            Settings.Instance["Aux" + thisaux + "_desc"] = mavlinkComboBox1.SelectedValue.ToString();
+            if (mavlinkComboBox1.SelectedValue != null) Settings.Instance["Aux" + thisaux + "_desc"] = mavlinkComboBox1.SelectedValue.ToString();
         }
 
         public AuxOptions()
         {
             InitializeComponent();
 
+            projectCheckTimer = new Timer(components ?? (components = new System.ComponentModel.Container())) { Interval = 250 };
+            projectCheckTimer.Tick += (sender, args) => { if (Visible) UpdateProjectAvailability(); };
+            projectCheckTimer.Start();
+            mavlinkComboBox1.SelectedValueChanged += (sender, args) => UpdateProjectAvailability();
+            TXT_low_value.TextChanged += (sender, args) => UpdateProjectAvailability();
+            TXT_highvalue.TextChanged += (sender, args) => UpdateProjectAvailability();
             loadSettings();
 
             TXT_rcchannel.BackColor = Color.Gray;
@@ -99,45 +108,77 @@ namespace MissionPlanner.Controls
             }
         }
 
-        private void BUT_Low_Click(object sender, EventArgs e)
+        // 按实际发送档位判定，不按可自定义的按钮文字判定；固件来源见交付记录。
+        public static bool? ProjectArmIntent(int option, int position)
         {
-            try
+            if (option == 41 || option == 153 || option == 154)
             {
-                if (MainV2.comPort.doCommand((byte)MainV2.comPort.sysidcurrent, (byte)MainV2.comPort.compidcurrent, MAVLink.MAV_CMD.DO_AUX_FUNCTION, (int)mavlinkComboBox1.SelectedValue, int.Parse(TXT_low_value.Text), 0, 0,
-                    0, 0, 0))
-                {
-                    TXT_rcchannel.BackColor = Color.Red;
-                }
-                else
-                {
-                    CustomMessageBox.Show(Strings.CommandFailed, Strings.ERROR);
-                }
+                if (position == 2) return true;
+                if (position == 0) return false;
             }
-            catch (Exception ex)
+            if (option == 81 && position == 2) return false;
+            if (option == 165 && position == 2) return true;
+            return null;
+        }
+        private bool TryPosition(int slot, out int position)
+        {
+            position = 0;
+            int low, high;
+            if (slot == 0) return int.TryParse(TXT_low_value.Text, out position);
+            if (slot == 2) return int.TryParse(TXT_highvalue.Text, out position);
+            if (!int.TryParse(TXT_low_value.Text, out low) || !int.TryParse(TXT_highvalue.Text, out high)) return false;
+            // 沿用原 MP 中档计算，检查依据与实际发出的 param2 完全一致。
+            position = (high - low) / 2 + low;
+            return true;
+        }
+        private void UpdateProjectAvailability()
+        {
+            if (IsDisposed || BUT_Low == null || BUT_High == null || but_mid == null) return;
+            ProjectPreflight.RefreshConnection();
+            int option;
+            bool selected = int.TryParse(Convert.ToString(mavlinkComboBox1.SelectedValue), out option);
+            var buttons = new Button[] { BUT_Low, but_mid, BUT_High };
+            for (var slot = 0; slot < 3; slot++)
             {
-                CustomMessageBox.Show(Strings.CommandFailed + ex.ToString(), Strings.ERROR);
+                int position;
+                buttons[slot].Enabled = !commandPending && selected && TryPosition(slot, out position) &&
+                    (ProjectArmIntent(option, position) != true || ProjectPreflight.Checklist.CanArm);
             }
         }
-
-        private void BUT_High_Click(object sender, EventArgs e)
+        private async void ExecuteProjectAux(int slot, Color color)
         {
+            if (commandPending) return;
+            UpdateProjectAvailability();
+            int option, position;
+            if (!int.TryParse(Convert.ToString(mavlinkComboBox1.SelectedValue), out option) || !TryPosition(slot, out position)) return;
+            var target = MainV2.comPort; var stream = target.BaseStream;
+            var system = target.MAV.sysid; var component = target.MAV.compid;
+            var intent = ProjectArmIntent(option, position);
+            if (intent == true && !ProjectPreflight.Checklist.CanArm) return;
+            if (intent.HasValue && !ProjectPreflight.ConfirmArm(this, intent.Value)) return;
+            Func<bool> sameTarget = () => !IsDisposed && ReferenceEquals(MainV2.comPort, target) && ReferenceEquals(target.BaseStream, stream) &&
+                stream.IsOpen && target.MAV.sysid == system && target.MAV.compid == component;
+            if (!sameTarget() || (intent == true && !ProjectPreflight.Checklist.CanArm)) return;
+            commandPending = true; UpdateProjectAvailability();
             try
             {
-                if (MainV2.comPort.doCommand((byte)MainV2.comPort.sysidcurrent, (byte)MainV2.comPort.compidcurrent, MAVLink.MAV_CMD.DO_AUX_FUNCTION, (int)mavlinkComboBox1.SelectedValue, int.Parse(TXT_highvalue.Text), 0, 0,
-                    0, 0, 0))
+                var accepted = await Task.Run(() =>
                 {
-                    TXT_rcchannel.BackColor = Color.Green;
-                }
-                else
-                {
-                    CustomMessageBox.Show(Strings.CommandFailed, Strings.ERROR);
-                }
+                    Action checkTarget = () => { if (!sameTarget() || (intent == true && !ProjectPreflight.Checklist.CanArm)) throw new OperationCanceledException(); };
+                    checkTarget();
+                    try { return target.doCommand(system, component, MAVLink.MAV_CMD.DO_AUX_FUNCTION, option, position, 0, 0, 0, 0, 0, true, checkTarget); }
+                    finally { target.giveComport = false; }
+                });
+                if (!sameTarget()) return;
+                if (accepted) { TXT_rcchannel.BackColor = color; TXT_rcchannel.Text = "飞控已接受：" + (slot == 0 ? "低" : slot == 1 ? "中" : "高") + "档"; }
+                else CustomMessageBox.Show(Strings.CommandFailed, Strings.ERROR);
             }
-            catch (Exception ex)
-            {
-                CustomMessageBox.Show(Strings.CommandFailed + ex.ToString(), Strings.ERROR);
-            }
+            catch (OperationCanceledException) { /* 确认后或等待应答时换目标，取消旧请求而不改新连接。 */ }
+            catch (Exception ex) { if (sameTarget()) CustomMessageBox.Show(Strings.CommandFailed + ex, Strings.ERROR); }
+            finally { commandPending = false; if (!IsDisposed) UpdateProjectAvailability(); }
         }
+        private void BUT_Low_Click(object sender, EventArgs e) { ExecuteProjectAux(0, Color.Red); }
+        private void BUT_High_Click(object sender, EventArgs e) { ExecuteProjectAux(2, Color.Green); }
         private void TXT_pwm_low_TextChanged(object sender, EventArgs e)
         {
             Settings.Instance["Aux" + thisaux + "_low"] = TXT_low_value.Text;
@@ -148,25 +189,7 @@ namespace MissionPlanner.Controls
             Settings.Instance["Aux" + thisaux + "_high"] = TXT_highvalue.Text;
         }
 
-        private void But_mid_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                if (MainV2.comPort.doCommand((byte)MainV2.comPort.sysidcurrent, (byte)MainV2.comPort.compidcurrent, MAVLink.MAV_CMD.DO_AUX_FUNCTION, (int)mavlinkComboBox1.SelectedValue, (int.Parse(TXT_highvalue.Text) - int.Parse(TXT_low_value.Text)) / 2 + int.Parse(TXT_low_value.Text), 0, 0,
-                    0, 0, 0))
-                {
-                    TXT_rcchannel.BackColor = Color.Orange;
-                }
-                else
-                {
-                    CustomMessageBox.Show(Strings.CommandFailed, Strings.ERROR);
-                }
-            }
-            catch (Exception ex)
-            {
-                CustomMessageBox.Show(Strings.CommandFailed + ex.ToString(), Strings.ERROR);
-            }
-        }
+        private void But_mid_Click(object sender, EventArgs e) { ExecuteProjectAux(1, Color.Orange); }
 
         private void txt_midvalue_TextChanged(object sender, EventArgs e)
         {

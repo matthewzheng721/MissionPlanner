@@ -16,6 +16,8 @@ namespace MissionPlanner.Joystick
         protected static readonly ILog log = LogManager.GetLogger(MethodBase.GetCurrentMethod().DeclaringType);
         protected IMyJoystickState state;
         public bool enabled = false;
+        // 主应用在摇杆操作层提供检查与确认，不改变 MAVLink 协议调用。
+        public static Func<bool, bool> ArmConfirmation { get; set; }
         bool[] buttonpressed = new bool[128];
         public string name;
         public bool elevons = false;
@@ -426,6 +428,7 @@ namespace MissionPlanner.Joystick
                         {
                             try
                             {
+                                if (ArmConfirmation != null && !ArmConfirmation(true)) return;
                                 Interface.doARM((byte)Interface.sysidcurrent,(byte)Interface.compidcurrent,true);
                             }
                             catch
@@ -460,6 +463,7 @@ namespace MissionPlanner.Joystick
                         {
                             try
                             {
+                                if (ArmConfirmation != null && !ArmConfirmation(false)) return;
                                 Interface.doARM((byte)Interface.sysidcurrent,(byte)Interface.compidcurrent,false);
                             }
                             catch

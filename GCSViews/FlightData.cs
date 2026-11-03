@@ -1,4 +1,4 @@
-using DirectShowLib;
+﻿using DirectShowLib;
 using Dowding.Model;
 using GMap.NET;
 using GMap.NET.WindowsForms;
@@ -420,6 +420,7 @@ namespace MissionPlanner.GCSViews
             hud1.displayicons = Settings.Instance.GetBoolean("HUD_showicons", false);
 
             tabControlactions.Multiline = Settings.Instance.GetBoolean("tabControlactions_Multiline", false);
+            InitializeProjectWorkspace();
 
         }
 
@@ -643,6 +644,7 @@ namespace MissionPlanner.GCSViews
 
         public void Deactivate()
         {
+            if (projectWorkspaceReady) SaveProjectWorkspaceLayout();
             if (MainV2.MONO)
             {
                 hud1.Dock = DockStyle.None;
@@ -656,7 +658,7 @@ namespace MissionPlanner.GCSViews
             Settings.Instance["maplast_lng"] = gMapControl1.Position.Lng.ToString();
             Settings.Instance["maplast_zoom"] = gMapControl1.Zoom.ToString();
 
-            ZedGraphTimer.Stop();
+            if (!projectCurveWindowVisible) ZedGraphTimer.Stop();
         }
 
         public void LoadLogFile(string file)
@@ -736,6 +738,8 @@ namespace MissionPlanner.GCSViews
 
         public void updateDisplayView()
         {
+            // 常驻工作台不再从旧页签清单重建，保留参数编辑与工具位置。
+            if (projectWorkspaceReady) return;
             updateDisplayTabControlActions();
 
             loadTabControlActions();
@@ -791,6 +795,7 @@ namespace MissionPlanner.GCSViews
 
         protected override void Dispose(bool disposing)
         {
+            if (disposing && projectWorkspaceReady) SaveProjectWorkspaceLayout();
             base.Dispose(disposing);
 
             MainV2.comPort.logreadmode = false;
@@ -932,11 +937,8 @@ namespace MissionPlanner.GCSViews
                 var isitarmed = MainV2.comPort.MAV.cs.armed;
                 var action = MainV2.comPort.MAV.cs.armed ? "Disarm" : "Arm";
 
-                if (isitarmed)
-                    if (CustomMessageBox.Show("Are you sure you want to " + action, action,
-                            CustomMessageBox.MessageBoxButtons.YesNo) !=
-                        CustomMessageBox.DialogResult.Yes)
-                        return;
+                // 两个解锁入口共用检查条件；锁定也始终需要执行前确认。
+                if (!ProjectPreflight.ConfirmArm(this, !isitarmed)) return;
                 StringBuilder sb = new StringBuilder();
                 var sub = MainV2.comPort.SubscribeToPacketType(MAVLink.MAVLINK_MSG_ID.STATUSTEXT, message =>
                 {
@@ -955,6 +957,8 @@ namespace MissionPlanner.GCSViews
                             CustomMessageBox.MessageBoxIcon.Exclamation, "Force " + action, "Cancel") ==
                         CustomMessageBox.DialogResult.Yes)
                     {
+                        ProjectPreflight.RefreshConnection();
+                        if (!isitarmed && !ProjectPreflight.Checklist.CanArm) return;
                         ans = MainV2.comPort.doARM(!isitarmed, true);
                         if (ans == false)
                         {
@@ -1461,6 +1465,7 @@ namespace MissionPlanner.GCSViews
                             timeout = 0;
                             while (!MainV2.comPort.MAV.cs.armed)
                             {
+                                if (!ProjectPreflight.ConfirmArm(this, true)) return;
                                 MainV2.comPort.doARM(true);
                                 Thread.Sleep(1000);
                                 Application.DoEvents();
@@ -1630,9 +1635,7 @@ namespace MissionPlanner.GCSViews
                 return;
             }
 
-            if (
-                CustomMessageBox.Show("Are you sure you want to do " + CMB_action.Text + " ?", "Action",
-                    MessageBoxButtons.YesNo) == (int) DialogResult.Yes)
+            if (ProjectPreflight.ConfirmAction(this, CMB_action.Text, "请确认当前飞机状态与操作条件。"))
             {
                 try
                 {
@@ -1753,6 +1756,12 @@ namespace MissionPlanner.GCSViews
 
         private void CB_tuning_CheckedChanged(object sender, EventArgs e)
         {
+            if (projectWorkspaceReady)
+            {
+                ZedGraphTimer.Enabled = CB_tuning.Checked;
+                zg1.Visible = CB_tuning.Checked;
+                return;
+            }
             if (CB_tuning.Checked)
             {
                 splitContainer1.Panel1Collapsed = false;
@@ -2584,10 +2593,10 @@ namespace MissionPlanner.GCSViews
             if (Settings.Instance["CHK_autopan"] != null)
                 CHK_autopan.Checked = Settings.Instance.GetBoolean("CHK_autopan");
 
-            if (Settings.Instance.ContainsKey("HudSwap") && Settings.Instance["HudSwap"] == "true")
+            if (!projectWorkspaceReady && Settings.Instance.ContainsKey("HudSwap") && Settings.Instance["HudSwap"] == "true")
                 SwapHud1AndMap();
 
-            if (Settings.Instance.ContainsKey("FlightSplitter"))
+            if (!projectWorkspaceReady && Settings.Instance.ContainsKey("FlightSplitter"))
             {
                 MainH.SplitterDistance = Settings.Instance.GetInt32("FlightSplitter");
             }
@@ -2622,6 +2631,9 @@ namespace MissionPlanner.GCSViews
 
         private void FlightData_ParentChanged(object sender, EventArgs e)
         {
+            if (projectWorkspaceReady) UpdateProjectPlanningMode();
+            if (projectWorkspaceReady && projectParameters != null)
+                this.BeginInvokeIfRequired(() => projectParameters.ObserveProjectWorkspaceConnection());
             if (MainV2.cam != null)
             {
                 MainV2.cam.camimage += cam_camimage;
@@ -2733,6 +2745,7 @@ namespace MissionPlanner.GCSViews
                     splitContainer1.Panel2.Controls.Add(sc.Control);
                     ThemeManager.ApplyThemeTo(sc.Control);
                     ThemeManager.ApplyThemeTo(this);
+                    ApplyProjectAppearance();
 
                     sc.Control.Dock = DockStyle.Fill;
                     sc.Control.Visible = true;
@@ -3110,6 +3123,11 @@ namespace MissionPlanner.GCSViews
 
         private void hud1_DoubleClick(object sender, EventArgs e)
         {
+            if (projectWorkspaceReady)
+            {
+                ShowProjectHudWindow();
+                return;
+            }
             if (huddropout)
                 return;
 
@@ -3140,6 +3158,7 @@ namespace MissionPlanner.GCSViews
 
         private void hud1_Resize(object sender, EventArgs e)
         {
+            if (projectWorkspaceReady) return;
             Console.WriteLine("HUD resize " + hud1.Width + " " + hud1.Height); // +"\n"+ System.Environment.StackTrace);
 
             if (hud1.Parent == this.SubMainLeft.Panel1)
@@ -3683,6 +3702,8 @@ namespace MissionPlanner.GCSViews
                                     }
                                 }
 
+                                // 飞控当前任务与尚未上传的规划任务使用不同图层，互不清除。
+                                if (projectWorkspaceReady) wpOverlay.overlay.Id = "ProjectVehicleMission";
                                 var existing = gMapControl1.Overlays.Where(a => a.Id == wpOverlay.overlay.Id).ToList();
                                 foreach (var b in existing)
                                 {
@@ -4278,7 +4299,7 @@ namespace MissionPlanner.GCSViews
 
         void mymap_Paint(object sender, PaintEventArgs e)
         {
-            distanceBar1.DoPaintRemote(e);
+            if (!projectWorkspaceReady) distanceBar1.DoPaintRemote(e);
         }
 
         void NoFly_NoFlyEvent(object sender, NoFly.NoFly.NoFlyEventArgs e)
@@ -5022,7 +5043,7 @@ namespace MissionPlanner.GCSViews
         {
             Messagetabtimer.Stop();
 
-            if (tabControlactions.SelectedTab == tabStatus)
+            if (projectStatusWindowVisible || tabControlactions.SelectedTab == tabStatus)
             {
                 tabControlactions.Visible = false;
                 tabStatus.Visible = false;
@@ -5114,6 +5135,7 @@ namespace MissionPlanner.GCSViews
 
         private void tabQuick_Resize(object sender, EventArgs e)
         {
+            if (projectWorkspaceReady) return;
             tableLayoutPanelQuick.Width = tabQuick.Width;
             tableLayoutPanelQuick.AutoScroll = false;
         }
@@ -5294,7 +5316,9 @@ namespace MissionPlanner.GCSViews
         {
             try
             {
-                if (this.Visible && !this.IsDisposed)
+                if (projectWorkspaceReady && !IsDisposed)
+                    projectParameters?.ObserveProjectWorkspaceConnection();
+                if ((this.Visible || projectStatusWindowVisible || projectCurveWindowVisible) && !this.IsDisposed)
                 {
                     //Console.Write("bindingSource1 ");
                     MainV2.comPort.MAV.cs.UpdateCurrentSettings(bindingSource1.UpdateDataSource(MainV2.comPort.MAV.cs));
@@ -5303,7 +5327,14 @@ namespace MissionPlanner.GCSViews
                         bindingSourceHud.UpdateDataSource(MainV2.comPort.MAV.cs));
                     //Console.WriteLine("DONE ");
 
-                    if (tabControlactions.SelectedTab == tabStatus)
+                    if (projectWorkspaceReady)
+                    {
+                        MainV2.comPort.MAV.cs.UpdateCurrentSettings(
+                            bindingSourceQuickTab.UpdateDataSource(MainV2.comPort.MAV.cs));
+                        UpdateProjectWorkspaceStatus();
+                    }
+
+                    if (projectStatusWindowVisible || tabControlactions.SelectedTab == tabStatus)
                     {
                         MainV2.comPort.MAV.cs.UpdateCurrentSettings(
                             bindingSourceStatusTab.UpdateDataSource(MainV2.comPort.MAV.cs));

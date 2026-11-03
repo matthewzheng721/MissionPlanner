@@ -148,14 +148,9 @@ namespace MissionPlanner.GCSViews
                 // 本项目只提供已确认的配置页；参数未齐时继续显示原加载页。
                 if (MainV2.comPort.BaseStream.IsOpen && gotAllParams)
                 {
-                    if (MainV2.comPort.MAV.cs.firmware == Firmwares.ArduCopter2)
-                        start = AddBackstageViewPage(typeof(ConfigArducopter), Strings.ExtendedTuning);
-                    else if (MainV2.comPort.MAV.cs.firmware == Firmwares.ArduPlane)
-                        start = AddBackstageViewPage(typeof(ConfigArducopter), "QP " + Strings.ExtendedTuning);
 
                     if ((MainV2.comPort.MAV.cs.capabilities & (int)MAVLink.MAV_PROTOCOL_CAPABILITY.FTP) > 0)
                         AddBackstageViewPage(typeof(MavFTPUI), Strings.MAVFtp);
-                    AddBackstageViewPage(typeof(ConfigUserDefined), Strings.User_Params);
                 }
                 if (!MainV2.comPort.BaseStream.IsOpen || gotAllParams)
                     AddBackstageViewPage(typeof(ConfigRawParams), Strings.FullParameterList, null, false);

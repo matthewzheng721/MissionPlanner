@@ -1,4 +1,4 @@
-using log4net;
+﻿using log4net;
 using MissionPlanner.Controls;
 using MissionPlanner.Utilities;
 using System;
@@ -91,12 +91,16 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                     log.InfoFormat("{0} to {1}", col.Name, col.Width);
                 }
             }
-            splitContainer1.SplitterDistance = Settings.Instance.GetInt32("rawparam_splitterdistance", 180);
-            splitContainer1.Panel1Collapsed = Settings.Instance.GetBoolean("rawparam_panel1collapsed", false);
+            if (!projectWorkspaceMode)
+                splitContainer1.SplitterDistance = Settings.Instance.GetInt32("rawparam_splitterdistance", 180);
+            splitContainer1.Panel1Collapsed = projectWorkspaceMode || Settings.Instance.GetBoolean("rawparam_panel1collapsed", false);
             but_collapse.Text = splitContainer1.Panel1Collapsed ? ">" : "<";
 
             if (!await processToScreen()) return;
 
+            // 下载期间已启动的加载若覆盖当前全表，不再排入同一轮重复重建。
+            if (projectWorkspaceMode && Params.Rows.Count == MainV2.comPort.MAV.param.Count())
+                projectParameterCount = Params.Rows.Count;
             Params.Enabled = true;
 
             Common.MessageShowAgain(Strings.RawParamWarning, Strings.RawParamWarningi);
@@ -271,12 +275,15 @@ namespace MissionPlanner.GCSViews.ConfigurationView
         private async void BUT_writePIDS_Click(object sender, EventArgs e)
         {
             if (writingParameters) return;
+            if (projectWorkspaceMode) ObserveProjectWorkspaceConnection();
             Params.EndEdit();
             // 本批只写点击时的值；等待应答期间的新编辑保留在待写列表。
             var snapshot = _changes.Keys.Cast<string>().ToDictionary(k => k, k => (double)_changes[k]);
             var port = MainV2.comPort;
             byte system = (byte)port.sysidcurrent;
             byte component = (byte)port.compidcurrent;
+            var parameterStream = port.BaseStream;
+            var parameterVehicle = port.MAV;
             // sort with enable at the bottom - this ensures params are set before the function is disabled
             var temp = snapshot.Keys.ToList();
 
@@ -345,7 +352,17 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                             return;
                         }
 
-                        if (!await Task.Run(() => port.setParam(system, component, value, snapshot[value])))
+                        if (!ReferenceEquals(port.BaseStream, parameterStream) || !ReferenceEquals(port.MAV, parameterVehicle))
+                        {
+                            CustomMessageBox.Show("连接或目标已变化，本批剩余参数未发送。", "参数写入已停止");
+                            return;
+                        }
+                        if (!await Task.Run(() =>
+                        {
+                            if (!ReferenceEquals(port.BaseStream, parameterStream) || !ReferenceEquals(port.MAV, parameterVehicle))
+                                return false;
+                            return port.setParam(system, component, value, snapshot[value]);
+                        }))
                             throw new InvalidOperationException("飞控未确认参数写入");
                         // 切页后继续写完本批快照，但不再访问已释放的表格。
                         //check if reboot required
@@ -423,7 +440,12 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             finally
             {
                 writingParameters = false;
-                if (!IsDisposed) BUT_writePIDS.Enabled = true;
+                if (!IsDisposed)
+                {
+                    BUT_writePIDS.Enabled = true;
+                    if (projectWorkspaceMode && _changes.Count == 0 && !Params.IsCurrentCellInEditMode)
+                        Params.Sort(Command, ListSortDirection.Ascending);
+                }
             }
         }
 
@@ -446,8 +468,8 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
                     Form paramCompareForm = new ParamCompare(Params, MainV2.comPort.MAV.param, param2);
 
-                    ThemeManager.ApplyThemeTo(paramCompareForm);
-                    paramCompareForm.ShowDialog();
+                    ThemeManager.ApplyThemeTo(paramCompareForm); MissionPlanner.Controls.ProjectWorkspaceStyle.Apply(paramCompareForm);
+                    ShowProjectParameterComparison(paramCompareForm);
                 }
             }
         }
@@ -730,7 +752,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                     }
                 }
 
-                Default_value.Visible = has_defaults;
+                Default_value.Visible = has_defaults && !projectWorkspaceMode;
                 chk_none_default.Visible = has_defaults;
             }
             //update values in rowlist
@@ -1070,7 +1092,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
 
                 Form paramCompareForm = new ParamCompare(Params, MainV2.comPort.MAV.param, param2);
 
-                ThemeManager.ApplyThemeTo(paramCompareForm);
+                ThemeManager.ApplyThemeTo(paramCompareForm); MissionPlanner.Controls.ProjectWorkspaceStyle.Apply(paramCompareForm);
                 if (paramCompareForm.ShowDialog() == DialogResult.OK)
                 {
                     CustomMessageBox.Show("Loaded parameters, please make sure you write them!", "Loaded");
@@ -1166,12 +1188,12 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                 }
                 else
                 {
-                    // remove entry
-                    var list = Settings.Instance.GetList("fav_params");
-                    Settings.Instance.SetList("fav_params", list.Where(s => s != name));
+                    // 删除最后一项时同时移除配置键，避免正常保存后重新出现旧收藏。
+                    Settings.Instance.RemoveList("fav_params", name);
                 }
 
-                Params.Sort(Command, ListSortDirection.Ascending);
+                // 收藏即时保存，等写入或刷新后再排序，避免编辑中的行跳动。
+                if (!projectWorkspaceMode) Params.Sort(Command, ListSortDirection.Ascending);
             }
         }
 

@@ -1,4 +1,5 @@
 using MissionPlanner.Controls;
+using MissionPlanner.Utilities;
 using System;
 using System.Drawing;
 using System.Text;
@@ -11,8 +12,9 @@ namespace MissionPlanner.GCSViews.ConfigurationView
     public class ConfigProjectMotor : MyUserControl, IActivate, IDeactivate
     {
         private const string ParameterName = "SERVO5_TRIM";
-        private readonly MyButton startButton = new MyButton { Name = "startButton", Text = "启动电机", Location = new Point(20, 20), Size = new Size(110, 30) };
+        private readonly MyButton startButton = new MyButton { Name = "startButton", Text = "一键开机", Location = new Point(20, 20), Size = new Size(110, 30) };
         private readonly MyButton restoreButton = new MyButton { Name = "restoreButton", Text = "恢复", Location = new Point(145, 20), Size = new Size(110, 30) };
+        private readonly MyButton stopButton = new MyButton { Text = "一键停车", Location = new Point(270, 20), Size = new Size(110, 30) };
         private readonly Label currentValue = new Label { Name = "currentValue", AutoSize = true, Location = new Point(20, 65), Text = "SERVO5_TRIM：尚未回读" };
         private readonly Label status = new Label { Name = "status", AutoSize = true, Location = new Point(20, 95) };
         private readonly Timer readTimer = new Timer { Interval = 500 };
@@ -25,6 +27,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
         private DateTime readDeadline;
         private static readonly object writeOrder = new object();
         private static Task queuedWrite = Task.CompletedTask;
+        private static int engineVersion;
         private bool readInProgress;
         private int activation;
         private int writeVersion;
@@ -32,10 +35,11 @@ namespace MissionPlanner.GCSViews.ConfigurationView
         public ConfigProjectMotor()
         {
             Name = "ConfigProjectMotor";
-            Controls.AddRange(new Control[] { startButton, restoreButton, currentValue, status,
+            Controls.AddRange(new Control[] { startButton, restoreButton, stopButton, currentValue, status,
                 new Label { AutoSize = true, Location = new Point(20, 130), Text = "写入和回读仅表示参数状态；不表示电机已启动或已停止。" } });
-            startButton.Click += (sender, args) => WriteTrim(1300);
-            restoreButton.Click += (sender, args) => WriteTrim(2000);
+            startButton.Click += (sender, args) => StartEngine();
+            stopButton.Click += (sender, args) => StopEngine();
+            restoreButton.Click += (sender, args) => Restore();
             readTimer.Tick += (sender, args) => RefreshPendingRead();
         }
 
@@ -59,19 +63,20 @@ namespace MissionPlanner.GCSViews.ConfigurationView
         {
             active = false;
             activation++;
+            System.Threading.Interlocked.Increment(ref engineVersion);
             readTimer.Stop();
             if (port != null) port.OnPacketReceived -= ReceiveParameter;
         }
 
-        private bool CheckConnection()
+        private bool CheckConnection(bool requireTrim = true)
         {
-            if (port == null || !port.BaseStream.IsOpen)
+            if (port == null || !port.BaseStream.IsOpen || port != MainV2.comPort || port.MAV.sysid != sysid || port.MAV.compid != compid)
             {
                 status.Text = "连接已断开，参数值未确认。";
                 awaitingReadback = false;
                 return false;
             }
-            if (!port.MAVlist[sysid, compid].param.ContainsKey(ParameterName))
+            if (requireTrim && !port.MAVlist[sysid, compid].param.ContainsKey(ParameterName))
             {
                 status.Text = "当前飞控没有 SERVO5_TRIM 参数。";
                 awaitingReadback = false;
@@ -80,12 +85,88 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             return true;
         }
 
-        private async void WriteTrim(int value)
+        public void StartEngine()
+        {
+            if (!active || !CheckConnection()) return;
+            var target = port; var stream = target.BaseStream; var lifetime = activation;
+            var system = sysid; var component = compid;
+            if (target.MAVlist[system, component].param[ParameterName].Value != 2000) { status.Text = "SERVO5_TRIM 当前不是 2000，请先核对或恢复。"; return; }
+            if (!ProjectPreflight.ConfirmAction(this, "一键开机", "执行 Engine Start 后写入 SERVO5_TRIM=1300；3 秒恢复由飞控负责。")) return;
+            if (!SameOperation(target, stream, lifetime, system, component)) { status.Text = "确认期间连接或页面已变化，未执行。"; return; }
+            WriteTrim(1300, true);
+        }
+        public void Restore() { WriteTrim(2000); }
+        private bool SameOperation(MAVLinkInterface target, object stream, int lifetime, byte system, byte component)
+        {
+            return active && activation == lifetime && ReferenceEquals(port, target) && ReferenceEquals(MainV2.comPort, target) &&
+                ReferenceEquals(target.BaseStream, stream) && target.BaseStream.IsOpen && target.MAV.sysid == system && target.MAV.compid == component;
+        }
+        public async void StopEngine()
+        {
+            if (!active || !CheckConnection(false)) return;
+            var target = port; var system = sysid; var component = compid; var stream = target.BaseStream; var lifetime = activation;
+            if (!ProjectPreflight.ConfirmAction(this, "一键停车", "发送 Engine Stop；以飞控反馈和实际发动机状态为准。")) return;
+            if (!SameOperation(target, stream, lifetime, system, component)) { status.Text = "确认期间连接或页面已变化，未执行。"; return; }
+            var engineGeneration = System.Threading.Interlocked.Increment(ref engineVersion);
+            status.Text = "正在请求 Engine Stop，等待飞控应答…";
+            try
+            {
+                Task send;
+                lock (writeOrder)
+                {
+                    send = queuedWrite = queuedWrite.ContinueWith(async t =>
+                    {
+                        if (!SameOperation(target, stream, lifetime, system, component)) throw new InvalidOperationException("连接或页面已变化，已取消旧操作。");
+                        if (!await SendEngineCommand(target, system, component, stream, false, engineGeneration)) throw new InvalidOperationException("Engine Stop 未确认。");
+                    }, TaskScheduler.Default).Unwrap();
+                }
+                await send;
+                if (!IsDisposed && engineGeneration == System.Threading.Volatile.Read(ref engineVersion) && SameOperation(target, stream, lifetime, system, component)) status.Text = "Engine Stop 命令已确认；请观察发动机。";
+            }
+            catch (Exception ex) { if (!IsDisposed && activation == lifetime && engineGeneration == System.Threading.Volatile.Read(ref engineVersion)) status.Text = ex.Message; }
+        }
+        private static async Task<bool> SendEngineCommand(MAVLinkInterface target, byte system, byte component, object stream, bool start, int generation)
+        {
+            var acknowledgement = new TaskCompletionSource<bool>();
+            EventHandler<MAVLink.MAVLinkMessage> received = (sender, message) =>
+            {
+                if (!ReferenceEquals(target.BaseStream, stream) || message.sysid != system || message.compid != component || message.msgid != (uint)MAVLink.MAVLINK_MSG_ID.COMMAND_ACK) return;
+                if (generation != System.Threading.Volatile.Read(ref engineVersion)) return;
+                var ack = message.ToStructure<MAVLink.mavlink_command_ack_t>();
+                if (ack.command == (ushort)MAVLink.MAV_CMD.DO_ENGINE_CONTROL)
+                    acknowledgement.TrySetResult(ack.result == (byte)MAVLink.MAV_RESULT.ACCEPTED);
+            };
+            target.OnPacketReceived += received;
+            try
+            {
+                var packet = new MAVLink.mavlink_command_long_t { target_system = system, target_component = component,
+                    command = (ushort)MAVLink.MAV_CMD.DO_ENGINE_CONTROL, param1 = start ? 1 : 0 };
+                // 保留原 2 秒间隔和 3 次重试；只重试同一连接上的当前操作。
+                for (byte attempt = 0; attempt < 4; attempt++)
+                {
+                    if (!ReferenceEquals(target.BaseStream, stream) || !target.BaseStream.IsOpen || target.MAV.sysid != system || target.MAV.compid != component || generation != System.Threading.Volatile.Read(ref engineVersion)) return false;
+                    packet.confirmation = attempt;
+                    target.sendPacket(packet, system, component);
+                    var deadline = DateTime.UtcNow.AddSeconds(2);
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        if (!ReferenceEquals(target.BaseStream, stream) || !target.BaseStream.IsOpen || target.MAV.sysid != system || target.MAV.compid != component || generation != System.Threading.Volatile.Read(ref engineVersion)) return false;
+                        if (acknowledgement.Task.IsCompleted) return await acknowledgement.Task;
+                        await Task.WhenAny(acknowledgement.Task, Task.Delay(50));
+                    }
+                }
+                return false;
+            }
+            finally { target.OnPacketReceived -= received; }
+        }
+        private async void WriteTrim(int value, bool engineStart = false)
         {
             if (!active || !CheckConnection()) return;
             var version = ++writeVersion;
+            var engineGeneration = System.Threading.Interlocked.Increment(ref engineVersion);
             var lifetime = activation;
             var target = port;
+            var stream = target.BaseStream;
             var targetSystem = sysid;
             var targetComponent = compid;
             requestedValue = value;
@@ -110,15 +191,21 @@ namespace MissionPlanner.GCSViews.ConfigurationView
                 // 仅排入用户点击的写入，跨页面保持顺序；等待公共写锁不会阻塞界面。
                 lock (writeOrder)
                 {
-                    send = queuedWrite = queuedWrite.ContinueWith(previous =>
-                        target.sendPacket(packet, targetSystem, targetComponent), TaskScheduler.Default);
+                    send = queuedWrite = queuedWrite.ContinueWith(async previous =>
+                        {
+                            if (!SameOperation(target, stream, lifetime, targetSystem, targetComponent)) throw new InvalidOperationException("连接或页面已变化，已取消旧操作。");
+                            if (engineStart && !await SendEngineCommand(target, targetSystem, targetComponent, stream, true, engineGeneration)) throw new InvalidOperationException("Engine Start 未确认，未写入 1300。");
+                            if (!SameOperation(target, stream, lifetime, targetSystem, targetComponent)) throw new InvalidOperationException("连接或页面已变化，已取消旧操作。");
+                            if (engineStart && engineGeneration != System.Threading.Volatile.Read(ref engineVersion)) throw new InvalidOperationException("旧开机操作已取消，未写入 1300。");
+                            target.sendPacket(packet, targetSystem, targetComponent);
+                        }, TaskScheduler.Default).Unwrap();
                 }
                 await send;
                 if (active && activation == lifetime && writeVersion == version) RequestRead();
             }
             catch (Exception ex)
             {
-                if (active && activation == lifetime && writeVersion == version)
+                if (active && activation == lifetime && writeVersion == version && (!engineStart || engineGeneration == System.Threading.Volatile.Read(ref engineVersion)))
                 {
                     awaitingReadback = false;
                     status.Text = "写入未确认：" + ex.Message;
@@ -138,6 +225,7 @@ namespace MissionPlanner.GCSViews.ConfigurationView
             if (readInProgress) return;
             readInProgress = true;
             var target = port;
+            var stream = target.BaseStream;
             var targetSystem = sysid;
             var targetComponent = compid;
             var lifetime = activation;

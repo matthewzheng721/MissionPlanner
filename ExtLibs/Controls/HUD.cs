@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
@@ -120,7 +120,7 @@ namespace MissionPlanner.Controls
         }
     }
 
-    public class HUD : GLControl
+    public partial class HUD : GLControl
     {
         private static readonly ILog log =
             LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
@@ -277,6 +277,11 @@ namespace MissionPlanner.Controls
         protected override void Dispose(bool disposing)
         {
             log.Info("HUD Dispose");
+            if (disposing)
+            {
+                projectInstrumentTip?.Dispose();
+                projectInstrumentFont?.Dispose();
+            }
 
             if (opengl)
             {
@@ -1979,6 +1984,13 @@ namespace MissionPlanner.Controls
                     bgon = true;
                 }
 
+                if (ProjectInstrumentStyle)
+                {
+                    if (UseProjectAvionics) DrawProjectAvionics();
+                    else DrawProjectInstrument();
+                }
+                else
+                {
                 // localize it
                 float _roll = this._roll;
 
@@ -3254,6 +3266,8 @@ namespace MissionPlanner.Controls
                     }
                 }
 
+                }
+
                 if (DesignMode)
                 {
                     return;
@@ -3347,7 +3361,7 @@ namespace MissionPlanner.Controls
             foreach (char cha in text)
             {
                 int charno = (int) cha;
-                int charid = charno ^ (int) (fontsize * 1000) ^ brush.Color.ToArgb();
+                int charid = HudCharacterKey(charno, fontsize, brush.Color);
 
                 if (!charDict.ContainsKey(charid))
                 {
@@ -3373,7 +3387,7 @@ namespace MissionPlanner.Controls
             foreach (char cha in text)
             {
                 int charno = (int)cha;
-                int charid = charno ^ (int)(fontsize * 1000) ^ brush.Color.ToArgb();
+                int charid = HudCharacterKey(charno, fontsize, brush.Color);
 
                 if (!charDict.ContainsKey(charid))
                 {
@@ -3435,7 +3449,7 @@ namespace MissionPlanner.Controls
             {
                 int charno = (int)cha;
 
-                int charid = charno ^ (int)(fontsize * 1000) ^ brush.Color.ToArgb();
+                int charid = HudCharacterKey(charno, fontsize, brush.Color);
 
                 if (!charDict.ContainsKey(charid))
                 {
@@ -3478,7 +3492,7 @@ namespace MissionPlanner.Controls
                     {
                         gfx.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
-                        gfx.DrawPath(this._p, pth);
+                        if (!ProjectInstrumentStyle) gfx.DrawPath(this._p, pth);
 
                         //Draw the face
 
@@ -3557,7 +3571,7 @@ namespace MissionPlanner.Controls
             {
                 int charno = (int) cha;
 
-                int charid = charno ^ (int) (fontsize * 1000) ^ brush.Color.ToArgb();
+                int charid = HudCharacterKey(charno, fontsize, brush.Color);
 
                 if (!charDict.ContainsKey(charid))
                 {
@@ -3600,7 +3614,7 @@ namespace MissionPlanner.Controls
                     {
                         gfx.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
-                        gfx.DrawPath(this._p, pth);
+                        if (!ProjectInstrumentStyle) gfx.DrawPath(this._p, pth);
 
                         //Draw the face
 
@@ -3699,6 +3713,9 @@ namespace MissionPlanner.Controls
 
             base.OnResize(e);
 
+            // 新工作台服从实际面板尺寸；原 MP 继续保持原宽高比。
+            if (!ProjectInstrumentStyle)
+            {
             if (SixteenXNine)
             {
                 int ht = (int) (this.Width / 1.777f);
@@ -3719,6 +3736,8 @@ namespace MissionPlanner.Controls
                 }
             }
 
+            }
+            projectCharacterWidths.Clear();
             graphicsObjectGDIP = new GdiGraphics(Graphics.FromImage(objBitmap));
 
             try

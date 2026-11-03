@@ -6606,6 +6606,8 @@ Column 1: Field type (RALLY is the only one at the moment -- may have RALLY_LAND
         /// <param name="e"></param>
         public void timer1_Tick(object sender, EventArgs e)
         {
+            // 共享地图的实时飞机与引导显示由 FlightData 维护，规划器不重复绘制。
+            if (projectInline) return;
             try
             {
                 if (isMouseDown || CurentRectMarker != null)
